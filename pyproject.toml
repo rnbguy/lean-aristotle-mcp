@@ -6,18 +6,18 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
-    "python-dotenv>=1.0.0",
-    "aristotlelib~=0.6.0",  # Pin to 0.6.x; 0.x libs may break on minor bumps
+    "mcp>=1.27.0",
+    "python-dotenv>=1.2.2",
+    "aristotlelib>=1.0.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.0.0",
-    "ruff>=0.1.0",
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-timeout>=2.0.0",
+    "mypy>=1.20.2",
+    "ruff>=0.15.11",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-timeout>=2.4.0",
 ]
 
 [project.scripts]
