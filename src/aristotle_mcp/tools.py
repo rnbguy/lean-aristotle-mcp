@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tarfile
 import tempfile
 import threading
 import time
@@ -197,6 +198,12 @@ def _map_api_status(status_str: str, percent_complete: int | None) -> tuple[str,
 
     if status_str == "COMPLETE":
         return "complete", "Proof completed"
+    elif status_str == "COMPLETE_WITH_ERRORS":
+        return "complete", "Proof completed with errors"
+    elif status_str == "OUT_OF_BUDGET":
+        return "failed", "Proof ran out of budget"
+    elif status_str == "CANCELED":
+        return "failed", "Proof was canceled"
     elif status_str in ("QUEUED", "NOT_STARTED"):
         return "queued", "Proof is queued, waiting to start"
     elif status_str == "IN_PROGRESS":
@@ -301,61 +308,81 @@ async def prove(
             canonicalized_context.append(canonical)
 
     try:
+        import shutil
+
         from aristotlelib import Project
 
-        # Create project (async)
-        project = await Project.create()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            code_filename = "proof.lean"
+            code_path = os.path.join(temp_dir, code_filename)
 
-        # Add context files if provided (async)
-        if canonicalized_context:
-            await project.add_context(canonicalized_context)
+            code_with_hint = f"-- Hint: {hint}\n{code}" if hint else code
+            with open(code_path, "w") as f:
+                f.write(code_with_hint)
 
-        # If hint is provided, add it as a comment
-        code_with_hint = code
-        if hint:
-            code_with_hint = f"-- Hint: {hint}\n{code}"
+            if canonicalized_context:
+                for ctx_file in canonicalized_context:
+                    shutil.copy2(ctx_file, os.path.join(temp_dir, os.path.basename(ctx_file)))
 
-        # Solve with the provided code (async)
-        await project.solve(input_content=code_with_hint)
-
-        project_id = str(project.project_id)
-
-        # If not waiting, return immediately with project_id
-        if not wait:
-            return ProveResult(
-                status="submitted",
-                project_id=project_id,
-                message="Proof submitted. Use check_proof to poll for results.",
+            project = await Project.create_from_directory(
+                prompt="Please prove all sorry statements in the provided Lean code.",
+                project_dir=temp_dir,
             )
 
-        # Wait for completion with a temp output file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
-            output_path = f.name
+            project_id = str(project.project_id)
 
-        try:
-            solution_path = await project.wait_for_completion(output_file_path=output_path)
+            if not wait:
+                return ProveResult(
+                    status="submitted",
+                    project_id=project_id,
+                    message="Proof submitted. Use check_proof to poll for results.",
+                )
+
+            solution_path = await project.wait_for_completion()
 
             if solution_path and os.path.exists(solution_path):
-                with open(solution_path) as f:
-                    solved_code = f.read()
-                return ProveResult(
-                    status="proved",
-                    code=solved_code,
-                    project_id=project_id,
-                    message="Successfully proved",
-                )
+                extract_dir = tempfile.mkdtemp()
+                try:
+                    with tarfile.open(solution_path, "r:gz") as tar:
+                        tar.extractall(extract_dir)
+
+                    extracted_proof_path = os.path.join(extract_dir, code_filename)
+                    if os.path.exists(extracted_proof_path):
+                        with open(extracted_proof_path) as f:
+                            solved_code = f.read()
+                        return ProveResult(
+                            status="proved",
+                            code=solved_code,
+                            project_id=project_id,
+                            message="Successfully proved",
+                        )
+                    else:
+                        lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
+                        if lean_files:
+                            with open(os.path.join(extract_dir, lean_files[0])) as f:
+                                solved_code = f.read()
+                            return ProveResult(
+                                status="proved",
+                                code=solved_code,
+                                project_id=project_id,
+                                message="Successfully proved",
+                            )
+                        else:
+                            return ProveResult(
+                                status="failed",
+                                project_id=project_id,
+                                message="Solution file not found in archive",
+                            )
+                finally:
+                    shutil.rmtree(extract_dir)
+                    os.unlink(solution_path)
             else:
-                # Check project status for more info
                 await project.refresh()
                 return ProveResult(
                     status="failed",
                     project_id=project_id,
                     message=f"Project status: {project.status}",
                 )
-        finally:
-            # Clean up temp file
-            if os.path.exists(output_path):
-                os.unlink(output_path)
 
     except Exception as e:
         error_msg = str(e)
@@ -409,7 +436,7 @@ async def check_proof(project_id: str) -> ProveResult:
                 output_path = f.name
 
             try:
-                solution_path = await project.get_solution(output_path=output_path)
+                solution_path = await project.get_solution(destination=output_path)
                 if solution_path and os.path.exists(solution_path):
                     with open(solution_path) as f:
                         solved_code = f.read()
@@ -508,41 +535,23 @@ async def prove_file(
         return ProveFileResult(status="error", message=_API_KEY_ERROR)
 
     try:
-        from aristotlelib import Project, ProjectStatus
+        import shutil
 
-        # Use prove_from_file for both sync and async modes
-        # This ensures auto_add_imports is used to handle local dependencies
-        result = await Project.prove_from_file(
-            input_file_path=canonical_path,
-            output_file_path=actual_output_path,
-            auto_add_imports=True,
-            wait_for_completion=wait,
+        from aristotlelib import Project
+
+        file_dir = os.path.dirname(canonical_path) or "."
+        file_name = os.path.basename(canonical_path)
+
+        project = await Project.create_from_directory(
+            prompt=f"Please prove all sorry statements in {file_name}.",
+            project_dir=file_dir,
         )
 
-        # For async mode, we need to find the project_id for polling
+        project_id = str(project.project_id)
+
         if not wait:
-            # NOTE: This is a potential race condition if multiple proofs are submitted
-            # simultaneously. The aristotlelib API doesn't return project_id from
-            # prove_from_file, so we have to find it by listing recent projects.
-            # This should be fixed upstream in aristotlelib.
-            projects, _ = await Project.list_projects(
-                limit=5,
-                status=[ProjectStatus.QUEUED, ProjectStatus.IN_PROGRESS, ProjectStatus.NOT_STARTED],
-            )
-
-            if not projects:
-                return ProveFileResult(
-                    status="error",
-                    message="Could not find submitted project",
-                )
-
-            # Take the most recent project (first in list)
-            project = projects[0]
-            project_id = str(project.project_id)
-
             # Cleanup stale metadata before adding new entry
             _cleanup_stale_metadata()
-
             # Store metadata for retrieval when polling (thread-safe)
             with _metadata_lock:
                 _async_job_metadata[project_id] = {
@@ -558,8 +567,41 @@ async def prove_file(
                 message="Proof submitted. Use check_prove_file to poll for results.",
             )
 
-        # Sync mode completed - analyze the result
-        return _analyze_solution_file(result)
+        solution_path = await project.wait_for_completion()
+
+        if solution_path and os.path.exists(solution_path):
+            extract_dir = tempfile.mkdtemp()
+            try:
+                with tarfile.open(solution_path, "r:gz") as tar:
+                    tar.extractall(extract_dir)
+
+                source_file = os.path.join(extract_dir, file_name)
+                if os.path.exists(source_file):
+                    os.makedirs(os.path.dirname(actual_output_path) or ".", exist_ok=True)
+                    shutil.copy2(source_file, actual_output_path)
+                    return _analyze_solution_file(actual_output_path, project_id)
+                else:
+                    lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
+                    if lean_files:
+                        os.makedirs(os.path.dirname(actual_output_path) or ".", exist_ok=True)
+                        shutil.copy2(os.path.join(extract_dir, lean_files[0]), actual_output_path)
+                        return _analyze_solution_file(actual_output_path, project_id)
+                    else:
+                        return ProveFileResult(
+                            status="failed",
+                            project_id=project_id,
+                            message="Solution file not found in archive",
+                        )
+            finally:
+                shutil.rmtree(extract_dir)
+                os.unlink(solution_path)
+        else:
+            await project.refresh()
+            return ProveFileResult(
+                status="failed",
+                project_id=project_id,
+                message=f"Project status: {project.status}",
+            )
 
     except Exception as e:
         return ProveFileResult(
@@ -639,7 +681,7 @@ async def check_prove_file(
             safe_output_path = _find_unique_path(output_path)
 
             # Get the solution
-            solution_path = await project.get_solution(output_path=safe_output_path)
+            solution_path = await project.get_solution(destination=safe_output_path)
 
             # Note: metadata is NOT cleared here - TTL cleanup handles it.
             # This allows saving to multiple paths if needed.
@@ -710,70 +752,75 @@ async def formalize(
             )
 
     try:
-        from aristotlelib import Project, ProjectInputType, ProjectStatus
+        import shutil
 
-        # Create a temp file with the natural language description
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(description)
-            temp_path = f.name
+        from aristotlelib import Project
 
-        try:
-            # Use informal input type for natural language
-            result_path = await Project.prove_from_file(
-                input_file_path=temp_path,
-                project_input_type=ProjectInputType.INFORMAL,
-                formal_input_context=canonical_context,
-                wait_for_completion=wait,
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with open(os.path.join(temp_dir, "description.txt"), "w") as f:
+                f.write(description)
+
+            if canonical_context:
+                ctx_name = os.path.basename(canonical_context)
+                shutil.copy2(canonical_context, os.path.join(temp_dir, ctx_name))
+
+            prove_instruction = " and prove it" if prove else ""
+            prompt_text = (
+                f"Please formalize the following mathematical statement"
+                f"{prove_instruction}: {description}"
+            )
+            project = await Project.create_from_directory(
+                prompt=prompt_text,
+                project_dir=temp_dir,
             )
 
-            # For async mode, find the project_id for polling
+            project_id = str(project.project_id)
+
             if not wait:
-                projects, _ = await Project.list_projects(
-                    limit=5,
-                    status=[
-                        ProjectStatus.QUEUED,
-                        ProjectStatus.IN_PROGRESS,
-                        ProjectStatus.NOT_STARTED,
-                    ],
-                )
-
-                if not projects:
-                    return FormalizeResult(
-                        status="error",
-                        message="Could not find submitted project",
-                    )
-
-                project = projects[0]
-                project_id = str(project.project_id)
-
                 return FormalizeResult(
                     status="submitted",
                     project_id=project_id,
                     message="Formalization submitted. Use check_formalize to poll for results.",
                 )
 
-            if result_path and os.path.exists(result_path):
-                with open(result_path) as f:
-                    lean_code = f.read()
+            solution_path = await project.wait_for_completion()
 
-                # Trust the API result - if prove was requested and completed, it's proved
-                status = "proved" if prove else "formalized"
-                msg = "Successfully formalized and proved" if prove else "Successfully formalized"
+            if solution_path and os.path.exists(solution_path):
+                extract_dir = tempfile.mkdtemp()
+                try:
+                    with tarfile.open(solution_path, "r:gz") as tar:
+                        tar.extractall(extract_dir)
 
-                return FormalizeResult(
-                    status=status,
-                    lean_code=lean_code,
-                    message=msg,
-                )
+                    lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
+                    if lean_files:
+                        with open(os.path.join(extract_dir, lean_files[0])) as f:
+                            lean_code = f.read()
+
+                        status = "proved" if prove else "formalized"
+                        if prove:
+                            msg = "Successfully formalized and proved"
+                        else:
+                            msg = "Successfully formalized"
+
+                        return FormalizeResult(
+                            status=status,
+                            lean_code=lean_code,
+                            message=msg,
+                        )
+                    else:
+                        return FormalizeResult(
+                            status="failed",
+                            message="No Lean code found in result",
+                        )
+                finally:
+                    shutil.rmtree(extract_dir)
+                    os.unlink(solution_path)
             else:
+                await project.refresh()
                 return FormalizeResult(
                     status="failed",
-                    message="Could not formalize the statement",
+                    message=f"Project status: {project.status}",
                 )
-        finally:
-            if wait:
-                # Only delete temp file in sync mode; async needs it until completion
-                os.unlink(temp_path)
 
     except Exception as e:
         return FormalizeResult(
@@ -819,7 +866,7 @@ async def check_formalize(project_id: str) -> FormalizeResult:
                 output_path = f.name
 
             try:
-                solution_path = await project.get_solution(output_path=output_path)
+                solution_path = await project.get_solution(destination=output_path)
                 if solution_path and os.path.exists(solution_path):
                     with open(solution_path) as f:
                         lean_code = f.read()
