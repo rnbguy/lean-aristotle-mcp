@@ -147,7 +147,7 @@ Prove all `sorry` statements in a Lean file, with automatic import resolution fr
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `file_path` | string | Yes | Path to Lean file with `sorry` statements |
-| `output_path` | string | No | Where to write solution (default: `{file}.solved.lean`) |
+| `output_path` | string | No | Where to write solution (default: `{base}_aristotle{ext}`) |
 | `wait` | boolean | No | If true (default), block until complete. If false, return project_id for polling. |
 
 **Returns:**
@@ -183,6 +183,7 @@ Check the status of a previously submitted file proof job.
 |------|------|----------|-------------|
 | `project_id` | string | Yes | The project ID returned from `prove_file(wait=false)` |
 | `output_path` | string | No | Where to write solution when complete |
+| `save` | boolean | No | If true, write the solution file. Defaults to false for status-only polling. |
 
 **Returns:**
 ```json
@@ -192,10 +193,12 @@ Check the status of a previously submitted file proof job.
   "percent_complete": "number (0-100)",
   "sorries_filled": "number (when complete)",
   "sorries_total": "number (when complete)",
-  "output_path": "string (when complete)",
+  "output_path": "string (when complete and save=true)",
   "message": "string"
 }
 ```
+
+By default, `check_prove_file` only polls status. Call it with `save=true` to write the extracted Lean solution to `output_path`.
 
 ### 5. `formalize`
 

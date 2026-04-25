@@ -29,7 +29,7 @@ AI: "Aristotle filled it in using simp."
 AI: "Let me prove all the sorries in your theorem file."
 → prove_file(file_path="src/MyTheorem.lean")
 → Aristotle auto-imports all Lake dependencies and project files
-→ {"status": "proved", "sorries_filled": 3, "sorries_total": 3, "output_path": "src/MyTheorem.solved.lean"}
+→ {"status": "proved", "sorries_filled": 3, "sorries_total": 3, "output_path": "src/MyTheorem_aristotle.lean"}
 ```
 
 **Flow (async for large files):**
@@ -44,7 +44,11 @@ AI: [polls later]
 
 AI: [polls again]
 → check_prove_file(project_id="xyz-789")
-→ {"status": "proved", "percent_complete": 100, "sorries_filled": 15, "sorries_total": 15}
+→ {"status": "proved", "percent_complete": 100, "message": "Proof complete. Call again with save=True to write the solution."}
+
+AI: [saves the solution]
+→ check_prove_file(project_id="xyz-789", save=True)
+→ {"status": "proved", "percent_complete": 100, "output_path": "src/BigFile_aristotle.lean"}
 ```
 
 **Tools:** `prove_file(file_path)` with optional `wait=False`, `check_prove_file(project_id)` for polling
