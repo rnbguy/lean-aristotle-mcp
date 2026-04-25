@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import os
+import tarfile
 import threading
+import time
 import uuid
+from datetime import UTC, datetime
+from io import BytesIO
 from typing import TypedDict
 
-from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
+from aristotle_mcp.models import (
+    FormalizeResult,
+    ProjectFileResult,
+    ProjectResult,
+    ProveFileResult,
+    ProveResult,
+)
 
 # Thread lock for accessing shared mock state
 _mock_lock = threading.Lock()
@@ -45,6 +55,123 @@ class _MockFormalizeProjectData(TypedDict):
     lean_code: str | None
     message: str
     poll_count: int
+
+
+def _mock_timestamp() -> str:
+    """Return an ISO timestamp for mock project metadata."""
+    return datetime.now(UTC).isoformat()
+
+
+def _mock_raw_status(final_status: str, poll_count: int) -> tuple[str, str, int]:
+    """Map mock job state to project metadata status."""
+    if final_status == "canceled":
+        return "CANCELED", "canceled", 100
+    if poll_count <= 1:
+        return "QUEUED", "queued", 0
+    if poll_count == 2:
+        return "IN_PROGRESS", "in_progress", 50
+    if final_status in ("proved", "formalized"):
+        return "COMPLETE", "complete", 100
+    if final_status in ("partial", "counterexample"):
+        return "COMPLETE_WITH_ERRORS", "complete_with_errors", 100
+    if final_status == "failed":
+        return "FAILED", "failed", 100
+    return "UNKNOWN", "unknown", 0
+
+
+def _mock_known_project(project_id: str) -> bool:
+    """Return whether a mock project exists."""
+    return (
+        project_id in _mock_projects
+        or project_id in _mock_file_projects
+        or project_id in _mock_formalize_projects
+    )
+
+
+def _safe_mock_filename(project_id: str, suffix: str) -> str:
+    """Create a safe local mock artifact filename."""
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in project_id)
+    if not safe_id:
+        safe_id = "project"
+    return f"{safe_id}{suffix}"
+
+
+def _mock_unique_path(path: str) -> str:
+    """Return a unique path by adding a numeric suffix if needed."""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    for i in range(1, 1001):
+        candidate = f"{base}.{i}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+    raise RuntimeError(f"Could not find unique path: {path}")
+
+
+def _resolve_mock_output_path(
+    project_id: str,
+    output_path: str | None,
+    suffix: str,
+    overwrite: bool,
+) -> tuple[str | None, str | None]:
+    """Resolve a mock download path, returning an error message if unsafe."""
+    if output_path is None:
+        return os.path.abspath(_mock_unique_path(_safe_mock_filename(project_id, suffix))), None
+
+    absolute_path = os.path.abspath(output_path)
+    if os.path.exists(absolute_path) and not overwrite:
+        return None, "Output file already exists. Pass overwrite=True to replace it."
+    os.makedirs(os.path.dirname(absolute_path) or ".", exist_ok=True)
+    return absolute_path, None
+
+
+def _write_mock_archive(output_path: str, filename: str, content: str) -> None:
+    """Write a small tar.gz archive for mock artifact downloads."""
+    data = content.encode()
+    info = tarfile.TarInfo(name=filename)
+    info.size = len(data)
+    info.mtime = int(time.time())
+    with tarfile.open(output_path, "w:gz") as tar:
+        tar.addfile(info, BytesIO(data))
+
+
+def _mock_project_status(project_id: str) -> tuple[str, str, int, str | None]:
+    """Return raw status, mapped status, percent, and summary for a mock project."""
+    if project_id in _mock_projects:
+        project = _mock_projects[project_id]
+        raw_status, status, percent = _mock_raw_status(project["status"], project["poll_count"])
+        return raw_status, status, percent, project["message"]
+    if project_id in _mock_file_projects:
+        file_project = _mock_file_projects[project_id]
+        raw_status, status, percent = _mock_raw_status(
+            file_project["status"],
+            file_project["poll_count"],
+        )
+        return raw_status, status, percent, file_project["message"]
+    formalize_project = _mock_formalize_projects[project_id]
+    raw_status, status, percent = _mock_raw_status(
+        formalize_project["status"],
+        formalize_project["poll_count"],
+    )
+    return raw_status, status, percent, formalize_project["message"]
+
+
+def _mock_solution_content(project_id: str) -> str | None:
+    """Return mock solution content if the project has downloadable output."""
+    if project_id in _mock_projects:
+        project = _mock_projects[project_id]
+        if project["status"] in ("proved", "counterexample"):
+            return project["code"] or project["counterexample"]
+        return None
+    if project_id in _mock_file_projects:
+        file_project = _mock_file_projects[project_id]
+        if file_project["status"] in ("proved", "partial"):
+            return "-- Mock Aristotle file solution\n"
+        return None
+    formalize_project = _mock_formalize_projects[project_id]
+    if formalize_project["status"] in ("formalized", "proved"):
+        return formalize_project["lean_code"]
+    return None
 
 
 def mock_prove(
@@ -122,6 +249,15 @@ def mock_prove(
         )
 
     # Waiting - return the final result immediately
+    with _mock_lock:
+        _mock_projects[project_id] = _MockProjectData(
+            status=final_status,
+            code=final_code,
+            counterexample=final_counterexample,
+            message=final_message,
+            poll_count=3,
+        )
+
     return ProveResult(
         status=final_status,
         code=final_code,
@@ -246,6 +382,14 @@ def mock_prove_file(
         )
 
     # Waiting - return final result
+    with _mock_lock:
+        _mock_file_projects[project_id] = _MockFileProjectData(
+            status=final_status,
+            output_path=output_path,
+            message=final_message,
+            poll_count=3,
+        )
+
     return ProveFileResult(
         status=final_status,
         output_path=output_path,
@@ -442,6 +586,14 @@ def mock_formalize(
         )
 
     # Waiting - return final result immediately
+    with _mock_lock:
+        _mock_formalize_projects[project_id] = _MockFormalizeProjectData(
+            status=final_status,
+            lean_code=lean_code,
+            message=final_message,
+            poll_count=3,
+        )
+
     return FormalizeResult(
         status=final_status,
         lean_code=lean_code,
@@ -500,3 +652,172 @@ def mock_check_formalize(project_id: str) -> FormalizeResult:
                 percent_complete=100,
                 message=project["message"],
             )
+
+
+def mock_get_project(project_id: str) -> ProjectResult:
+    """Mock implementation of get_project."""
+    with _mock_lock:
+        if not _mock_known_project(project_id):
+            return ProjectResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+        raw_status, status, percent_complete, output_summary = _mock_project_status(project_id)
+
+    return ProjectResult(
+        status=status,
+        project_id=project_id,
+        raw_status=raw_status,
+        percent_complete=percent_complete,
+        created_at=_mock_timestamp(),
+        last_updated_at=_mock_timestamp(),
+        input_prompt="Mock Aristotle project",
+        output_summary=output_summary if percent_complete == 100 else None,
+        message=f"Project status: {status}",
+    )
+
+
+def mock_cancel_project(project_id: str) -> ProjectResult:
+    """Mock implementation of cancel_project."""
+    with _mock_lock:
+        if project_id in _mock_projects:
+            _mock_projects[project_id]["status"] = "canceled"
+            _mock_projects[project_id]["message"] = "Project was canceled"
+            _mock_projects[project_id]["poll_count"] = 3
+        elif project_id in _mock_file_projects:
+            _mock_file_projects[project_id]["status"] = "canceled"
+            _mock_file_projects[project_id]["message"] = "Project was canceled"
+            _mock_file_projects[project_id]["poll_count"] = 3
+        elif project_id in _mock_formalize_projects:
+            _mock_formalize_projects[project_id]["status"] = "canceled"
+            _mock_formalize_projects[project_id]["message"] = "Project was canceled"
+            _mock_formalize_projects[project_id]["poll_count"] = 3
+        else:
+            return ProjectResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+    return ProjectResult(
+        status="canceled",
+        project_id=project_id,
+        raw_status="CANCELED",
+        percent_complete=100,
+        created_at=_mock_timestamp(),
+        last_updated_at=_mock_timestamp(),
+        input_prompt="Mock Aristotle project",
+        message="Project canceled.",
+    )
+
+
+def mock_get_solution(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Mock implementation of get_solution."""
+    with _mock_lock:
+        if not _mock_known_project(project_id):
+            return ProjectFileResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+        raw_status, status, percent_complete, _summary = _mock_project_status(project_id)
+        content = _mock_solution_content(project_id)
+
+    if raw_status not in ("COMPLETE", "COMPLETE_WITH_ERRORS", "OUT_OF_BUDGET") or content is None:
+        return ProjectFileResult(
+            status=status,
+            project_id=project_id,
+            raw_status=raw_status,
+            percent_complete=percent_complete,
+            message="Project does not have a downloadable solution archive.",
+        )
+
+    resolved_path, error = _resolve_mock_output_path(
+        project_id,
+        output_path,
+        "_aristotle.tar.gz",
+        overwrite,
+    )
+    if error or resolved_path is None:
+        return ProjectFileResult(status="error", project_id=project_id, message=error or "")
+
+    _write_mock_archive(resolved_path, "solution.lean", content)
+    return ProjectFileResult(
+        status="saved",
+        project_id=project_id,
+        output_path=resolved_path,
+        raw_status=raw_status,
+        percent_complete=percent_complete,
+        message="Solution archive downloaded.",
+    )
+
+
+def mock_get_solution_if_complete(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Mock implementation of get_solution_if_complete."""
+    with _mock_lock:
+        if not _mock_known_project(project_id):
+            return ProjectFileResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+        raw_status, status, percent_complete, _summary = _mock_project_status(project_id)
+
+    if raw_status not in ("COMPLETE", "COMPLETE_WITH_ERRORS", "OUT_OF_BUDGET"):
+        return ProjectFileResult(
+            status=status,
+            project_id=project_id,
+            raw_status=raw_status,
+            percent_complete=percent_complete,
+            message="Project is not complete; no solution archive was downloaded.",
+        )
+
+    return mock_get_solution(project_id, output_path=output_path, overwrite=overwrite)
+
+
+def mock_get_input(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Mock implementation of get_input."""
+    with _mock_lock:
+        if not _mock_known_project(project_id):
+            return ProjectFileResult(
+                status="error",
+                project_id=project_id,
+                message=f"Unknown project ID: {project_id}",
+            )
+
+        raw_status, _status, percent_complete, _summary = _mock_project_status(project_id)
+
+    resolved_path, error = _resolve_mock_output_path(
+        project_id,
+        output_path,
+        "_input.tar.gz",
+        overwrite,
+    )
+    if error or resolved_path is None:
+        return ProjectFileResult(status="error", project_id=project_id, message=error or "")
+
+    _write_mock_archive(resolved_path, "input.txt", f"Mock input for project {project_id}\n")
+    return ProjectFileResult(
+        status="saved",
+        project_id=project_id,
+        output_path=resolved_path,
+        raw_status=raw_status,
+        percent_complete=percent_complete,
+        message="Input archive downloaded.",
+    )

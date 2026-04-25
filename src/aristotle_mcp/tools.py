@@ -8,24 +8,35 @@ import tarfile
 import tempfile
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
 from aristotle_mcp.mock import (
+    mock_cancel_project,
     mock_check_formalize,
     mock_check_proof,
     mock_check_prove_file,
     mock_formalize,
+    mock_get_input,
+    mock_get_project,
+    mock_get_solution,
+    mock_get_solution_if_complete,
     mock_prove,
     mock_prove_file,
 )
 from aristotle_mcp.models import (
     FormalizeResult,
+    ProjectFileResult,
+    ProjectResult,
     ProveFileResult,
     ProveResult,
     ResultDict,
     ResultValue,
 )
+
+if TYPE_CHECKING:
+    from aristotlelib import Project
 
 # Configure module logger
 _logger = logging.getLogger(__name__)
@@ -37,6 +48,8 @@ __all__ = [
     "ProveResult",
     "ProveFileResult",
     "FormalizeResult",
+    "ProjectResult",
+    "ProjectFileResult",
     "is_mock_mode",
     "has_api_key",
     "prove",
@@ -45,6 +58,11 @@ __all__ = [
     "check_prove_file",
     "formalize",
     "check_formalize",
+    "get_project",
+    "cancel_project",
+    "get_solution",
+    "get_solution_if_complete",
+    "get_input",
 ]
 
 
@@ -66,6 +84,10 @@ _METADATA_TTL_SECONDS = 30 * 24 * 60 * 60  # 2,592,000 seconds
 _MAX_CODE_SIZE = 1_000_000  # 1MB for code input
 _MAX_DESCRIPTION_SIZE = 100_000  # 100KB for natural language descriptions
 _MAX_FILE_SIZE = 10_000_000  # 10MB for file inputs
+
+_CANCELABLE_PROJECT_STATUSES = {"NOT_STARTED", "QUEUED", "IN_PROGRESS"}
+_SOLUTION_AVAILABLE_STATUSES = {"COMPLETE", "COMPLETE_WITH_ERRORS", "OUT_OF_BUDGET"}
+_TERMINAL_PROJECT_STATUSES = _SOLUTION_AVAILABLE_STATUSES | {"FAILED", "CANCELED"}
 
 # Helpful error message for missing API key
 _API_KEY_ERROR = (
@@ -109,6 +131,52 @@ def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
             continue
 
     raise RuntimeError(f"Could not find unique path after {max_attempts} attempts: {path}")
+
+
+def _safe_project_filename(project_id: str, suffix: str) -> str:
+    """Create a safe local filename from an Aristotle project ID."""
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in project_id)
+    if not safe_id:
+        safe_id = "project"
+    return f"{safe_id}{suffix}"
+
+
+def _reserve_download_path(
+    project_id: str,
+    output_path: str | None,
+    default_suffix: str,
+    overwrite: bool,
+) -> tuple[str, bool]:
+    """Resolve and reserve a download path before passing it to aristotlelib.
+
+    Returns:
+        Tuple of (absolute path, whether this function created a placeholder).
+    """
+    if output_path is None:
+        default_path = _canonicalize_path(_safe_project_filename(project_id, default_suffix))
+        os.makedirs(os.path.dirname(default_path) or ".", exist_ok=True)
+        return _find_unique_path(default_path), True
+
+    absolute_path = _canonicalize_path(output_path)
+    os.makedirs(os.path.dirname(absolute_path) or ".", exist_ok=True)
+
+    if overwrite:
+        return absolute_path, False
+
+    fd = os.open(absolute_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    os.close(fd)
+    return absolute_path, True
+
+
+def _remove_reserved_path(path: str, reserved: bool) -> None:
+    """Remove an empty placeholder file if a reserved download fails."""
+    if not reserved or not os.path.exists(path):
+        return
+    try:
+        if os.path.getsize(path) == 0:
+            os.unlink(path)
+    except OSError:
+        _logger.debug("Could not remove reserved download path: %s", path, exc_info=True)
 
 
 def _ensure_dotenv() -> None:
@@ -216,6 +284,114 @@ def _map_api_status(status_str: str, percent_complete: int | None) -> tuple[str,
         return "in_progress", f"Status: {status_str}"
 
 
+def _map_project_status(status_str: str) -> str:
+    """Map aristotlelib project status to a stable MCP status string."""
+    status_map = {
+        "UNKNOWN": "unknown",
+        "NOT_STARTED": "not_started",
+        "QUEUED": "queued",
+        "IN_PROGRESS": "in_progress",
+        "COMPLETE": "complete",
+        "COMPLETE_WITH_ERRORS": "complete_with_errors",
+        "OUT_OF_BUDGET": "out_of_budget",
+        "FAILED": "failed",
+        "CANCELED": "canceled",
+    }
+    return status_map.get(status_str, status_str.lower())
+
+
+def _project_status_name(project: Project) -> str:
+    """Return the raw aristotlelib status name for a project."""
+    return project.status.name
+
+
+def _project_to_result(
+    project: Project,
+    message: str | None = None,
+    status_override: str | None = None,
+) -> ProjectResult:
+    """Convert an aristotlelib Project into an MCP project result."""
+    raw_status = _project_status_name(project)
+    status = status_override or _map_project_status(raw_status)
+    result_message = message or f"Project status: {status}"
+
+    return ProjectResult(
+        status=status,
+        project_id=str(project.project_id),
+        raw_status=raw_status,
+        percent_complete=project.percent_complete,
+        created_at=project.created_at.isoformat(),
+        last_updated_at=project.last_updated_at.isoformat(),
+        input_prompt=project.input_prompt,
+        file_name=project.file_name,
+        description=project.description,
+        output_summary=project.output_summary,
+        message=result_message,
+    )
+
+
+async def _download_solution_from_project(
+    project: Project,
+    output_path: str | None,
+    overwrite: bool,
+) -> ProjectFileResult:
+    """Download a solution archive for a project with overwrite protection."""
+    project_id = str(project.project_id)
+    raw_status = _project_status_name(project)
+    reserved_path, reserved = _reserve_download_path(
+        project_id=project_id,
+        output_path=output_path,
+        default_suffix="_aristotle.tar.gz",
+        overwrite=overwrite,
+    )
+
+    try:
+        saved_path = await project.get_solution(destination=reserved_path)
+    except Exception:
+        _remove_reserved_path(reserved_path, reserved)
+        raise
+
+    return ProjectFileResult(
+        status="saved",
+        project_id=project_id,
+        output_path=os.path.abspath(str(saved_path)),
+        raw_status=raw_status,
+        percent_complete=project.percent_complete,
+        message="Solution archive downloaded.",
+    )
+
+
+async def _download_input_from_project(
+    project: Project,
+    output_path: str | None,
+    overwrite: bool,
+) -> ProjectFileResult:
+    """Download an input archive for a project with overwrite protection."""
+    project_id = str(project.project_id)
+    raw_status = _project_status_name(project)
+    reserved_path, reserved = _reserve_download_path(
+        project_id=project_id,
+        output_path=output_path,
+        default_suffix="_input.tar.gz",
+        overwrite=overwrite,
+    )
+
+    try:
+        saved_path = await project.get_input(destination=reserved_path)
+    except Exception:
+        _remove_reserved_path(reserved_path, reserved)
+        raise
+
+    return ProjectFileResult(
+        status="saved",
+        project_id=project_id,
+        output_path=os.path.abspath(str(saved_path)),
+        raw_status=raw_status,
+        percent_complete=project.percent_complete,
+        message="Input archive downloaded.",
+    )
+
+
 def _analyze_solution_file(
     solution_path: str,
     project_id: str | None = None,
@@ -258,6 +434,259 @@ def has_api_key() -> bool:
     """Check if an API key is configured."""
     _ensure_dotenv()
     return bool(os.environ.get("ARISTOTLE_API_KEY"))
+
+
+async def get_project(project_id: str) -> ProjectResult:
+    """Get current metadata for a single Aristotle project.
+
+    Args:
+        project_id: The Aristotle project ID to inspect.
+
+    Returns:
+        ProjectResult with status, timestamps, prompt, and summary fields when available.
+    """
+    if not project_id.strip():
+        return ProjectResult(
+            status="error",
+            project_id=project_id,
+            message="project_id is required.",
+        )
+
+    if is_mock_mode():
+        return mock_get_project(project_id)
+
+    if not has_api_key():
+        return ProjectResult(status="error", project_id=project_id, message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        project = await Project.from_id(project_id)
+        return _project_to_result(project)
+    except Exception as e:
+        return ProjectResult(
+            status="error",
+            project_id=project_id,
+            message=_sanitize_api_error(e),
+        )
+
+
+async def cancel_project(project_id: str) -> ProjectResult:
+    """Cancel a queued or in-progress Aristotle project.
+
+    Args:
+        project_id: The Aristotle project ID to cancel.
+
+    Returns:
+        ProjectResult with the resulting project status.
+    """
+    if not project_id.strip():
+        return ProjectResult(
+            status="error",
+            project_id=project_id,
+            message="project_id is required.",
+        )
+
+    if is_mock_mode():
+        return mock_cancel_project(project_id)
+
+    if not has_api_key():
+        return ProjectResult(status="error", project_id=project_id, message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        project = await Project.from_id(project_id)
+        raw_status = _project_status_name(project)
+
+        if raw_status in _TERMINAL_PROJECT_STATUSES:
+            status = _map_project_status(raw_status)
+            return _project_to_result(
+                project,
+                message=f"Project is already {status}; nothing to cancel.",
+            )
+
+        if raw_status not in _CANCELABLE_PROJECT_STATUSES:
+            return _project_to_result(
+                project,
+                message=f"Project status {raw_status} cannot be canceled.",
+            )
+
+        await project.cancel()
+        return _project_to_result(project, message="Project canceled.")
+    except Exception as e:
+        return ProjectResult(
+            status="error",
+            project_id=project_id,
+            message=_sanitize_api_error(e),
+        )
+
+
+async def get_solution(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Download a completed project's solution archive.
+
+    Args:
+        project_id: The Aristotle project ID.
+        output_path: Optional local path for the solution archive.
+        overwrite: Whether to overwrite output_path if it already exists.
+
+    Returns:
+        ProjectFileResult with output_path when the archive is saved.
+    """
+    if not project_id.strip():
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="project_id is required.",
+        )
+
+    if is_mock_mode():
+        return mock_get_solution(project_id, output_path=output_path, overwrite=overwrite)
+
+    if not has_api_key():
+        return ProjectFileResult(status="error", project_id=project_id, message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        project = await Project.from_id(project_id)
+        raw_status = _project_status_name(project)
+
+        if raw_status not in _SOLUTION_AVAILABLE_STATUSES:
+            return ProjectFileResult(
+                status=_map_project_status(raw_status),
+                project_id=project_id,
+                raw_status=raw_status,
+                percent_complete=project.percent_complete,
+                message="Project does not have a downloadable solution archive.",
+            )
+
+        return await _download_solution_from_project(project, output_path, overwrite)
+    except FileExistsError:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="Output file already exists. Pass overwrite=True to replace it.",
+        )
+    except Exception as e:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message=_sanitize_api_error(e),
+        )
+
+
+async def get_solution_if_complete(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Download a project solution archive only when Aristotle has output available.
+
+    Args:
+        project_id: The Aristotle project ID.
+        output_path: Optional local path for the solution archive.
+        overwrite: Whether to overwrite output_path if it already exists.
+
+    Returns:
+        ProjectFileResult with status indicating whether a file was saved.
+    """
+    if not project_id.strip():
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="project_id is required.",
+        )
+
+    if is_mock_mode():
+        return mock_get_solution_if_complete(
+            project_id,
+            output_path=output_path,
+            overwrite=overwrite,
+        )
+
+    if not has_api_key():
+        return ProjectFileResult(status="error", project_id=project_id, message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        project = await Project.from_id(project_id)
+        raw_status = _project_status_name(project)
+
+        if raw_status not in _SOLUTION_AVAILABLE_STATUSES:
+            return ProjectFileResult(
+                status=_map_project_status(raw_status),
+                project_id=project_id,
+                raw_status=raw_status,
+                percent_complete=project.percent_complete,
+                message="Project is not complete; no solution archive was downloaded.",
+            )
+
+        return await _download_solution_from_project(project, output_path, overwrite)
+    except FileExistsError:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="Output file already exists. Pass overwrite=True to replace it.",
+        )
+    except Exception as e:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message=_sanitize_api_error(e),
+        )
+
+
+async def get_input(
+    project_id: str,
+    output_path: str | None = None,
+    overwrite: bool = False,
+) -> ProjectFileResult:
+    """Download the original input archive for an Aristotle project.
+
+    Args:
+        project_id: The Aristotle project ID.
+        output_path: Optional local path for the input archive.
+        overwrite: Whether to overwrite output_path if it already exists.
+
+    Returns:
+        ProjectFileResult with output_path when the archive is saved.
+    """
+    if not project_id.strip():
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="project_id is required.",
+        )
+
+    if is_mock_mode():
+        return mock_get_input(project_id, output_path=output_path, overwrite=overwrite)
+
+    if not has_api_key():
+        return ProjectFileResult(status="error", project_id=project_id, message=_API_KEY_ERROR)
+
+    try:
+        from aristotlelib import Project
+
+        project = await Project.from_id(project_id)
+        return await _download_input_from_project(project, output_path, overwrite)
+    except FileExistsError:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message="Output file already exists. Pass overwrite=True to replace it.",
+        )
+    except Exception as e:
+        return ProjectFileResult(
+            status="error",
+            project_id=project_id,
+            message=_sanitize_api_error(e),
+        )
 
 
 async def prove(
