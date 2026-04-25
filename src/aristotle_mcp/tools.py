@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tarfile
 import tempfile
 import threading
@@ -177,6 +178,97 @@ def _remove_reserved_path(path: str, reserved: bool) -> None:
             os.unlink(path)
     except OSError:
         _logger.debug("Could not remove reserved download path: %s", path, exc_info=True)
+
+
+def _validate_archive_member(member_name: str, extract_dir: str) -> None:
+    """Ensure an archive member cannot escape the extraction directory."""
+    destination = os.path.realpath(os.path.join(extract_dir, member_name))
+    extract_root = os.path.realpath(extract_dir)
+    if os.path.commonpath([extract_root, destination]) != extract_root:
+        raise ValueError(f"Unsafe path in solution archive: {member_name}")
+
+
+def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
+    """Extract an Aristotle solution archive into a temporary directory."""
+    with tarfile.open(solution_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            _validate_archive_member(member.name, extract_dir)
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(extract_dir, filter="data")
+        else:
+            tar.extractall(extract_dir)
+
+
+def _find_lean_file(extract_dir: str, preferred_filename: str | None = None) -> str | None:
+    """Find the preferred Lean file from an extracted solution archive."""
+    if preferred_filename:
+        preferred_path = os.path.join(extract_dir, preferred_filename)
+        if os.path.exists(preferred_path):
+            return preferred_path
+
+        for root, dirs, files in os.walk(extract_dir):
+            dirs.sort()
+            for filename in sorted(files):
+                if filename == preferred_filename:
+                    return os.path.join(root, filename)
+
+    for root, dirs, files in os.walk(extract_dir):
+        dirs.sort()
+        for filename in sorted(files):
+            if filename.endswith(".lean"):
+                return os.path.join(root, filename)
+
+    return None
+
+
+def _read_lean_from_solution_archive(
+    solution_path: str,
+    preferred_filename: str | None = None,
+) -> str | None:
+    """Read Lean code from an Aristotle solution archive."""
+    extract_dir = tempfile.mkdtemp()
+    try:
+        _extract_solution_archive(solution_path, extract_dir)
+        lean_path = _find_lean_file(extract_dir, preferred_filename)
+        if lean_path is None:
+            return None
+        with open(lean_path) as f:
+            return f.read()
+    finally:
+        shutil.rmtree(extract_dir)
+
+
+def _copy_lean_from_solution_archive(
+    solution_path: str,
+    output_path: str,
+    preferred_filename: str | None = None,
+) -> bool:
+    """Copy Lean code from an Aristotle solution archive to output_path."""
+    extract_dir = tempfile.mkdtemp()
+    try:
+        _extract_solution_archive(solution_path, extract_dir)
+        lean_path = _find_lean_file(extract_dir, preferred_filename)
+        if lean_path is None:
+            return False
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        shutil.copy2(lean_path, output_path)
+        return True
+    finally:
+        shutil.rmtree(extract_dir)
+
+
+def _duplicate_context_basename_error(
+    context_files: list[str],
+    reserved_filenames: set[str],
+) -> str | None:
+    """Return an error if context files would collide in the submission directory."""
+    seen = set(reserved_filenames)
+    for ctx_file in context_files:
+        filename = os.path.basename(ctx_file)
+        if filename in seen:
+            return f"Context file basename would overwrite another input file: {filename}"
+        seen.add(filename)
+    return None
 
 
 def _ensure_dotenv() -> None:
@@ -736,9 +828,14 @@ async def prove(
                 )
             canonicalized_context.append(canonical)
 
-    try:
-        import shutil
+        basename_error = _duplicate_context_basename_error(
+            canonicalized_context,
+            reserved_filenames={"proof.lean"},
+        )
+        if basename_error:
+            return ProveResult(status="error", message=basename_error)
 
+    try:
         from aristotlelib import Project
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -770,40 +867,24 @@ async def prove(
             solution_path = await project.wait_for_completion()
 
             if solution_path and os.path.exists(solution_path):
-                extract_dir = tempfile.mkdtemp()
                 try:
-                    with tarfile.open(solution_path, "r:gz") as tar:
-                        tar.extractall(extract_dir)
-
-                    extracted_proof_path = os.path.join(extract_dir, code_filename)
-                    if os.path.exists(extracted_proof_path):
-                        with open(extracted_proof_path) as f:
-                            solved_code = f.read()
+                    solved_code = _read_lean_from_solution_archive(
+                        str(solution_path),
+                        preferred_filename=code_filename,
+                    )
+                    if solved_code is not None:
                         return ProveResult(
                             status="proved",
                             code=solved_code,
                             project_id=project_id,
                             message="Successfully proved",
                         )
-                    else:
-                        lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
-                        if lean_files:
-                            with open(os.path.join(extract_dir, lean_files[0])) as f:
-                                solved_code = f.read()
-                            return ProveResult(
-                                status="proved",
-                                code=solved_code,
-                                project_id=project_id,
-                                message="Successfully proved",
-                            )
-                        else:
-                            return ProveResult(
-                                status="failed",
-                                project_id=project_id,
-                                message="Solution file not found in archive",
-                            )
+                    return ProveResult(
+                        status="failed",
+                        project_id=project_id,
+                        message="Solution file not found in archive",
+                    )
                 finally:
-                    shutil.rmtree(extract_dir)
                     os.unlink(solution_path)
             else:
                 await project.refresh()
@@ -861,21 +942,24 @@ async def check_proof(project_id: str) -> ProveResult:
 
         if our_status == "complete":
             # Get the solution
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
                 output_path = f.name
 
             try:
                 solution_path = await project.get_solution(destination=output_path)
                 if solution_path and os.path.exists(solution_path):
-                    with open(solution_path) as f:
-                        solved_code = f.read()
-                    return ProveResult(
-                        status="proved",
-                        code=solved_code,
-                        project_id=project_id,
-                        percent_complete=100,
-                        message="Proof completed successfully",
+                    solved_code = _read_lean_from_solution_archive(
+                        str(solution_path),
+                        preferred_filename="proof.lean",
                     )
+                    if solved_code is not None:
+                        return ProveResult(
+                            status="proved",
+                            code=solved_code,
+                            project_id=project_id,
+                            percent_complete=100,
+                            message="Proof completed successfully",
+                        )
             finally:
                 if os.path.exists(output_path):
                     os.unlink(output_path)
@@ -964,8 +1048,6 @@ async def prove_file(
         return ProveFileResult(status="error", message=_API_KEY_ERROR)
 
     try:
-        import shutil
-
         from aristotlelib import Project
 
         file_dir = os.path.dirname(canonical_path) or "."
@@ -999,30 +1081,20 @@ async def prove_file(
         solution_path = await project.wait_for_completion()
 
         if solution_path and os.path.exists(solution_path):
-            extract_dir = tempfile.mkdtemp()
             try:
-                with tarfile.open(solution_path, "r:gz") as tar:
-                    tar.extractall(extract_dir)
-
-                source_file = os.path.join(extract_dir, file_name)
-                if os.path.exists(source_file):
-                    os.makedirs(os.path.dirname(actual_output_path) or ".", exist_ok=True)
-                    shutil.copy2(source_file, actual_output_path)
+                copied = _copy_lean_from_solution_archive(
+                    str(solution_path),
+                    actual_output_path,
+                    preferred_filename=file_name,
+                )
+                if copied:
                     return _analyze_solution_file(actual_output_path, project_id)
-                else:
-                    lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
-                    if lean_files:
-                        os.makedirs(os.path.dirname(actual_output_path) or ".", exist_ok=True)
-                        shutil.copy2(os.path.join(extract_dir, lean_files[0]), actual_output_path)
-                        return _analyze_solution_file(actual_output_path, project_id)
-                    else:
-                        return ProveFileResult(
-                            status="failed",
-                            project_id=project_id,
-                            message="Solution file not found in archive",
-                        )
+                return ProveFileResult(
+                    status="failed",
+                    project_id=project_id,
+                    message="Solution file not found in archive",
+                )
             finally:
-                shutil.rmtree(extract_dir)
                 os.unlink(solution_path)
         else:
             await project.refresh()
@@ -1110,12 +1182,32 @@ async def check_prove_file(
             safe_output_path = _find_unique_path(output_path)
 
             # Get the solution
-            solution_path = await project.get_solution(destination=safe_output_path)
+            try:
+                solution_path = await project.get_solution(destination=safe_output_path)
+                file_path = metadata.get("file_path")
+                preferred_filename = (
+                    os.path.basename(file_path) if isinstance(file_path, str) else None
+                )
+                copied = _copy_lean_from_solution_archive(
+                    str(solution_path),
+                    safe_output_path,
+                    preferred_filename=preferred_filename,
+                )
+                if not copied:
+                    return ProveFileResult(
+                        status="failed",
+                        project_id=project_id,
+                        percent_complete=100,
+                        message="Solution file not found in archive",
+                    )
+            finally:
+                if os.path.exists(safe_output_path) and tarfile.is_tarfile(safe_output_path):
+                    os.unlink(safe_output_path)
 
             # Note: metadata is NOT cleared here - TTL cleanup handles it.
             # This allows saving to multiple paths if needed.
 
-            return _analyze_solution_file(str(solution_path), project_id)
+            return _analyze_solution_file(safe_output_path, project_id)
 
         # Note: metadata cleanup is handled by TTL (_cleanup_stale_metadata),
         # not on completion/failure. This keeps the interface simpler.
@@ -1179,10 +1271,14 @@ async def formalize(
                 status="error",
                 message=f"Context file not found: {context_file}",
             )
+        basename_error = _duplicate_context_basename_error(
+            [canonical_context],
+            reserved_filenames={"description.txt"},
+        )
+        if basename_error:
+            return FormalizeResult(status="error", message=basename_error)
 
     try:
-        import shutil
-
         from aristotlelib import Project
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1215,16 +1311,9 @@ async def formalize(
             solution_path = await project.wait_for_completion()
 
             if solution_path and os.path.exists(solution_path):
-                extract_dir = tempfile.mkdtemp()
                 try:
-                    with tarfile.open(solution_path, "r:gz") as tar:
-                        tar.extractall(extract_dir)
-
-                    lean_files = [f for f in os.listdir(extract_dir) if f.endswith(".lean")]
-                    if lean_files:
-                        with open(os.path.join(extract_dir, lean_files[0])) as f:
-                            lean_code = f.read()
-
+                    lean_code = _read_lean_from_solution_archive(str(solution_path))
+                    if lean_code is not None:
                         status = "proved" if prove else "formalized"
                         if prove:
                             msg = "Successfully formalized and proved"
@@ -1242,7 +1331,6 @@ async def formalize(
                             message="No Lean code found in result",
                         )
                 finally:
-                    shutil.rmtree(extract_dir)
                     os.unlink(solution_path)
             else:
                 await project.refresh()
@@ -1291,21 +1379,21 @@ async def check_formalize(project_id: str) -> FormalizeResult:
 
         if our_status == "complete":
             # Get the solution
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
                 output_path = f.name
 
             try:
                 solution_path = await project.get_solution(destination=output_path)
                 if solution_path and os.path.exists(solution_path):
-                    with open(solution_path) as f:
-                        lean_code = f.read()
-                    return FormalizeResult(
-                        status="formalized",
-                        lean_code=lean_code,
-                        project_id=project_id,
-                        percent_complete=100,
-                        message="Formalization completed successfully",
-                    )
+                    lean_code = _read_lean_from_solution_archive(str(solution_path))
+                    if lean_code is not None:
+                        return FormalizeResult(
+                            status="formalized",
+                            lean_code=lean_code,
+                            project_id=project_id,
+                            percent_complete=100,
+                            message="Formalization completed successfully",
+                        )
             finally:
                 if os.path.exists(output_path):
                     os.unlink(output_path)

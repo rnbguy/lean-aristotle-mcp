@@ -1,7 +1,11 @@
 """Test the Aristotle MCP tools in mock mode."""
 
 import os
+import sys
 import tarfile
+import types
+from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -11,6 +15,7 @@ os.environ["ARISTOTLE_MOCK"] = "true"
 
 from aristotle_mcp.tools import (
     cancel_project,
+    check_formalize,
     check_proof,
     check_prove_file,
     formalize,
@@ -35,6 +40,59 @@ def example_lean_file() -> Path:
 @pytest.fixture
 def lean_project_file() -> Path:
     return LEAN_PROJECT_DIR / "TestProject" / "Arithmetic.lean"
+
+
+class _FakeStatus:
+    """Small status object matching aristotlelib enum behavior used by tools."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _write_solution_archive(path: str | Path, files: dict[str, str]) -> None:
+    """Write an Aristotle-style solution archive for fake API tests."""
+    with tarfile.open(path, "w:gz") as archive:
+        for filename, content in files.items():
+            data = content.encode()
+            info = tarfile.TarInfo(name=filename)
+            info.size = len(data)
+            archive.addfile(info, BytesIO(data))
+
+
+def _install_fake_aristotlelib(monkeypatch: pytest.MonkeyPatch, files: dict[str, str]) -> None:
+    """Install a fake aristotlelib module that returns a completed archive project."""
+
+    class FakeProject:
+        project_id = "fake-project"
+        status = _FakeStatus("COMPLETE")
+        percent_complete = 100
+        created_at = datetime.now(UTC)
+        last_updated_at = datetime.now(UTC)
+        input_prompt = None
+        file_name = None
+        description = None
+        output_summary = None
+
+        @classmethod
+        async def from_id(cls, project_id: str) -> "FakeProject":
+            project = cls()
+            project.project_id = project_id
+            return project
+
+        async def refresh(self) -> None:
+            return None
+
+        async def get_solution(self, destination: str | Path | None = None) -> Path:
+            assert destination is not None
+            destination_path = Path(destination)
+            _write_solution_archive(destination_path, files)
+            return destination_path
+
+    fake_module = types.ModuleType("aristotlelib")
+    fake_module.__dict__["Project"] = FakeProject
+    monkeypatch.setitem(sys.modules, "aristotlelib", fake_module)
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    monkeypatch.setenv("ARISTOTLE_API_KEY", "fake-key")
 
 
 def test_mock_mode_enabled() -> None:
@@ -68,6 +126,48 @@ async def test_prove_counterexample() -> None:
 
     assert result.status == "counterexample"
     assert result.counterexample is not None
+
+
+async def test_prove_rejects_context_file_named_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Context files cannot overwrite the generated proof input."""
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    monkeypatch.setenv("ARISTOTLE_API_KEY", "fake-key")
+    context_file = tmp_path / "proof.lean"
+    context_file.write_text("theorem context : True := by trivial\n")
+
+    result = await prove(
+        "theorem submitted : True := by sorry",
+        context_files=[str(context_file)],
+    )
+
+    assert result.status == "error"
+    assert "overwrite" in result.message.lower()
+
+
+async def test_prove_rejects_duplicate_context_basenames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Context files with duplicate basenames cannot overwrite each other."""
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    monkeypatch.setenv("ARISTOTLE_API_KEY", "fake-key")
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_context = first_dir / "Context.lean"
+    second_context = second_dir / "Context.lean"
+    first_context.write_text("theorem first : True := by trivial\n")
+    second_context.write_text("theorem second : True := by trivial\n")
+
+    result = await prove(
+        "theorem submitted : True := by sorry",
+        context_files=[str(first_context), str(second_context)],
+    )
+
+    assert result.status == "error"
+    assert "overwrite" in result.message.lower()
 
 
 async def test_prove_async_flow() -> None:
@@ -118,6 +218,18 @@ async def test_check_proof_percent_complete() -> None:
     # Third poll - proved, 100%
     result = await check_proof(project_id)
     assert result.status == "proved"
+    assert result.percent_complete == 100
+
+
+async def test_check_proof_extracts_solution_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real async proof polling extracts Lean code from the result archive."""
+    solved_code = "theorem async_archive : True := by trivial\n"
+    _install_fake_aristotlelib(monkeypatch, {"proof.lean": solved_code})
+
+    result = await check_proof("fake-proof-project")
+
+    assert result.status == "proved"
+    assert result.code == solved_code
     assert result.percent_complete == 100
 
 
@@ -218,6 +330,21 @@ async def test_formalize_with_context(example_lean_file: Path) -> None:
     assert "context" in result.message.lower()
 
 
+async def test_formalize_rejects_context_file_named_description(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Formalize context cannot overwrite the generated description input."""
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    monkeypatch.setenv("ARISTOTLE_API_KEY", "fake-key")
+    context_file = tmp_path / "description.txt"
+    context_file.write_text("context")
+
+    result = await formalize("A natural-language theorem", context_file=str(context_file))
+
+    assert result.status == "error"
+    assert "overwrite" in result.message.lower()
+
+
 async def test_formalize_async() -> None:
     """Test async formalization with polling."""
     from aristotle_mcp.tools import check_formalize
@@ -244,6 +371,18 @@ async def test_formalize_async() -> None:
     assert result.status == "formalized"
     assert result.percent_complete == 100
     assert result.lean_code is not None
+
+
+async def test_check_formalize_extracts_solution_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real async formalization polling extracts Lean code from the result archive."""
+    lean_code = "theorem formalized_archive : True := by trivial\n"
+    _install_fake_aristotlelib(monkeypatch, {"solution.lean": lean_code})
+
+    result = await check_formalize("fake-formalize-project")
+
+    assert result.status == "formalized"
+    assert result.lean_code == lean_code
+    assert result.percent_complete == 100
 
 
 async def test_formalize_async_with_prove() -> None:
@@ -341,6 +480,55 @@ async def test_check_prove_file_override_output_path(
 
     assert result.status == "proved"
     assert result.output_path == custom_output
+
+
+async def test_check_prove_file_save_extracts_solution_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Async file polling saves the Lean member, not the raw archive."""
+    solved_code = "theorem file_archive : True := by trivial\n"
+    _install_fake_aristotlelib(monkeypatch, {"input.lean": solved_code})
+    output_path = tmp_path / "solved.lean"
+
+    result = await check_prove_file(
+        "fake-file-project",
+        output_path=str(output_path),
+        save=True,
+    )
+
+    assert result.status == "proved"
+    assert result.output_path == str(output_path)
+    assert output_path.read_text() == solved_code
+    assert not tarfile.is_tarfile(output_path)
+
+
+async def test_check_prove_file_save_prefers_matching_basename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Async file polling saves the matching Lean file from multi-file archives."""
+    expected_code = "theorem target_archive : True := by trivial\n"
+    other_code = "theorem context_archive : True := by trivial\n"
+    _install_fake_aristotlelib(
+        monkeypatch,
+        {
+            "Context.lean": other_code,
+            "src/Target.lean": expected_code,
+        },
+    )
+    from aristotle_mcp import tools
+
+    output_path = tmp_path / "solved.lean"
+    tools._async_job_metadata["fake-file-project"] = {
+        "file_path": str(tmp_path / "Target.lean"),
+        "output_path": str(output_path),
+        "timestamp": 0,
+    }
+
+    result = await check_prove_file("fake-file-project", save=True)
+
+    assert result.status == "proved"
+    assert result.output_path == str(output_path)
+    assert output_path.read_text() == expected_code
 
 
 async def test_check_prove_file_save_requires_output_path(example_lean_file: Path) -> None:
