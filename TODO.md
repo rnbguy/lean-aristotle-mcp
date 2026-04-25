@@ -7,6 +7,7 @@ Ideas and potential improvements for the Aristotle MCP server.
 - ✅ **Split check vs save for async proofs** - Added `save` parameter (default `False`) to `check_prove_file`
 - ✅ **Async support for formalize** - Added `wait` parameter and `check_formalize` tool
 - ✅ **Clarify "check" vs "poll" terminology** - Updated all documentation to use "poll" consistently
+- ✅ **Project lifecycle tools** - Added `get_project`, `cancel_project`, `get_solution`, `get_solution_if_complete`, and `get_input`
 
 ## Feature Ideas
 
@@ -16,10 +17,11 @@ The `prove` tool handles code snippets but isn't file-aware. Could add:
 - Would need to parse Lean file and extract the theorem with its context
 - Useful when you only want to prove one thing without waiting for the whole file
 
-### Cancel queued jobs
-Would be nice to cancel a proof that's queued if you realize you made a mistake.
-- **Blocked**: aristotlelib API doesn't currently support cancellation
-- Revisit if API adds this capability
+### Deliberately omit project listing
+Do not expose `Project.list_projects()` through this MCP.
+- Aristotle project listing is account-level, not workspace-level
+- It can reveal projects unrelated to the current sandboxed codebase
+- Project lifecycle tools should require an explicit project ID
 
 ### Rename polling tools
 Consider renaming `check_*` tools to `poll_*` in a future breaking change:

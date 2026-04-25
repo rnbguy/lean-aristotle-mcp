@@ -156,6 +156,38 @@ AI: "Your theorem uses definitions from other files. Let me include those."
 
 ---
 
+## Story 7: Manage a Known Aristotle Project
+
+**Scenario:** The AI has a `project_id` from an earlier submission or from the Aristotle CLI. It needs to inspect, cancel, or download artifacts for that specific project without enumerating account-level project history.
+
+**Flow:**
+```
+AI: "I'll check that Aristotle project by ID."
+→ get_project(project_id="abc-123")
+→ {"status": "in_progress", "raw_status": "IN_PROGRESS", "percent_complete": 45}
+
+AI: "This job was submitted with the wrong statement, so I'll cancel it."
+→ cancel_project(project_id="abc-123")
+→ {"status": "canceled", "raw_status": "CANCELED"}
+```
+
+**Artifact flow:**
+```
+AI: "The job is complete. I'll download the solution archive."
+→ get_solution(project_id="xyz-789", output_path="aristotle-result.tar.gz")
+→ {"status": "saved", "output_path": ".../aristotle-result.tar.gz"}
+
+AI: "I'll also fetch the exact input Aristotle received."
+→ get_input(project_id="xyz-789", output_path="aristotle-input.tar.gz")
+→ {"status": "saved", "output_path": ".../aristotle-input.tar.gz"}
+```
+
+**Tools:** `get_project(project_id)`, `cancel_project(project_id)`, `get_solution(project_id)`, `get_solution_if_complete(project_id)`, `get_input(project_id)`
+
+**When to use:** You already have a project ID and need lifecycle operations. The MCP intentionally does not expose account-level project listing.
+
+---
+
 ## API Timing Expectations
 
 Based on testing, AI assistants should expect:

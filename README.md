@@ -20,6 +20,11 @@ To use this MCP server, you'll need an API key from [aristotle.harmonic.fun](htt
 | `check_proof` | Poll async proof jobs for completion |
 | `check_prove_file` | Poll async file proof jobs for completion |
 | `check_formalize` | Poll async formalization jobs for completion |
+| `get_project` | Inspect a known Aristotle project by project ID |
+| `cancel_project` | Cancel a queued or in-progress Aristotle project |
+| `get_solution` | Download a completed project's solution archive |
+| `get_solution_if_complete` | Download a solution archive only when output is available |
+| `get_input` | Download the original input archive for a project |
 
 ## Installation
 
@@ -162,6 +167,22 @@ Use async mode for long-running proofs to avoid blocking:
 - If `output_path` is omitted, uses the path from the original `prove_file` call (stored for 30 days)
 - You can override `output_path` to save to a different location
 - `check_proof` and `check_formalize` return the code directly in the response (no `save` parameter needed)
+
+## Project Lifecycle Tools
+
+The MCP exposes project-scoped lifecycle operations for project IDs you already know, such as IDs returned by `prove`, `prove_file`, `formalize`, or the Aristotle CLI.
+
+```
+get_project(project_id)                  → Inspect status and metadata
+cancel_project(project_id)               → Cancel queued/in-progress work
+get_solution(project_id, output_path)    → Save solution .tar.gz when complete
+get_solution_if_complete(project_id)     → Poll-friendly solution download
+get_input(project_id, output_path)       → Save original input .tar.gz
+```
+
+`list_projects` is intentionally not exposed. Aristotle projects are account-level rather than local workspace-level, so listing them could reveal unrelated projects outside the current sandboxed context.
+
+Download tools do not overwrite existing files by default. Pass `overwrite=True` only when replacing an existing archive is intended.
 
 ## Context Files
 

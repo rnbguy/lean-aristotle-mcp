@@ -233,6 +233,51 @@ Convert a natural language mathematical statement into Lean 4 code.
 }
 ```
 
+### 6. Project lifecycle tools
+
+These tools expose Aristotle project operations that are safe to scope by an explicit `project_id`. The MCP intentionally does not expose `Project.list_projects()` because Aristotle projects are account-level, not workspace-level.
+
+#### `get_project`
+
+Inspect a known project.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project_id` | string | Yes | Aristotle project ID |
+
+**Returns:** status, raw Aristotle status, percent complete, timestamps, input prompt, file name, description, and output summary when available.
+
+#### `cancel_project`
+
+Cancel queued or in-progress work for a known project.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project_id` | string | Yes | Aristotle project ID |
+
+#### `get_solution`
+
+Download a completed project's solution archive.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project_id` | string | Yes | Aristotle project ID |
+| `output_path` | string | No | Local `.tar.gz` path |
+| `overwrite` | boolean | No | Replace an existing output path (default: false) |
+
+#### `get_solution_if_complete`
+
+Download a solution archive only when Aristotle has output available. Queued or in-progress projects return status without writing a file.
+
+#### `get_input`
+
+Download the original input archive for a known project.
+
+**Parameters:** same as `get_solution`.
+
 ## MCP Resources
 
 ### `aristotle://status`
