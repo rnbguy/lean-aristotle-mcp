@@ -1,6 +1,7 @@
 """Test the Aristotle MCP tools in mock mode."""
 
 import os
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,14 @@ import pytest
 os.environ["ARISTOTLE_MOCK"] = "true"
 
 from aristotle_mcp.tools import (
+    cancel_project,
     check_proof,
     check_prove_file,
     formalize,
+    get_input,
+    get_project,
+    get_solution,
+    get_solution_if_complete,
     is_mock_mode,
     prove,
     prove_file,
@@ -358,3 +364,91 @@ async def test_check_prove_file_save_requires_output_path(example_lean_file: Pat
     assert result.status == "proved"
     # Message should indicate save=True is needed
     assert "save=True" in result.message
+
+
+async def test_get_project_from_known_async_job() -> None:
+    """Test retrieving metadata for a known project."""
+    submit_result = await prove("theorem project_meta : True := by sorry", wait=False)
+    assert submit_result.project_id is not None
+
+    result = await get_project(submit_result.project_id)
+
+    assert result.status == "queued"
+    assert result.raw_status == "QUEUED"
+    assert result.project_id == submit_result.project_id
+    assert result.percent_complete == 0
+
+
+async def test_cancel_project() -> None:
+    """Test canceling a known project."""
+    submit_result = await prove("theorem cancel_me : True := by sorry", wait=False)
+    assert submit_result.project_id is not None
+
+    result = await cancel_project(submit_result.project_id)
+
+    assert result.status == "canceled"
+    assert result.raw_status == "CANCELED"
+    assert result.project_id == submit_result.project_id
+
+
+async def test_cancel_project_unknown() -> None:
+    """Test cancel_project with an unknown project ID."""
+    result = await cancel_project("missing-project")
+
+    assert result.status == "error"
+    assert "unknown" in result.message.lower()
+
+
+async def test_get_solution_if_complete_not_ready() -> None:
+    """Test get_solution_if_complete avoids writing for in-progress projects."""
+    submit_result = await prove("theorem not_ready : True := by sorry", wait=False)
+    assert submit_result.project_id is not None
+
+    result = await get_solution_if_complete(submit_result.project_id)
+
+    assert result.status == "queued"
+    assert result.output_path is None
+    assert "not complete" in result.message.lower()
+
+
+async def test_get_solution_downloads_archive(tmp_path: Path) -> None:
+    """Test downloading a completed mock solution archive."""
+    prove_result = await prove("theorem solution_archive : True := by sorry")
+    assert prove_result.project_id is not None
+    output_path = tmp_path / "solution.tar.gz"
+
+    result = await get_solution(prove_result.project_id, output_path=str(output_path))
+
+    assert result.status == "saved"
+    assert result.output_path == str(output_path)
+    assert output_path.exists()
+    with tarfile.open(output_path, "r:gz") as archive:
+        assert "solution.lean" in archive.getnames()
+
+
+async def test_get_solution_refuses_overwrite(tmp_path: Path) -> None:
+    """Test solution downloads do not overwrite existing files by default."""
+    prove_result = await prove("theorem no_overwrite : True := by sorry")
+    assert prove_result.project_id is not None
+    output_path = tmp_path / "solution.tar.gz"
+    output_path.write_text("existing")
+
+    result = await get_solution(prove_result.project_id, output_path=str(output_path))
+
+    assert result.status == "error"
+    assert "already exists" in result.message.lower()
+
+
+async def test_get_input_downloads_archive(tmp_path: Path) -> None:
+    """Test downloading a mock input archive."""
+    prove_result = await prove("theorem input_archive : True := by sorry")
+    assert prove_result.project_id is not None
+    output_path = tmp_path / "input.tar.gz"
+
+    result = await get_input(prove_result.project_id, output_path=str(output_path))
+
+    assert result.status == "saved"
+    assert result.output_path == str(output_path)
+    assert output_path.exists()
+    with tarfile.open(output_path, "r:gz") as archive:
+        assert "input.txt" in archive.getnames()

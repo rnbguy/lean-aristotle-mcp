@@ -5,11 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from aristotle_mcp.models import FormalizeResult, ProveFileResult, ProveResult
+from aristotle_mcp.models import (
+    FormalizeResult,
+    ProjectFileResult,
+    ProjectResult,
+    ProveFileResult,
+    ProveResult,
+)
 from aristotle_mcp.tools import (
     _canonicalize_path,
     _find_unique_path,
     _map_api_status,
+    _map_project_status,
     _sanitize_api_error,
 )
 
@@ -126,6 +133,22 @@ class TestMapApiStatus:
         status, message = _map_api_status("IN_PROGRESS", None)
         assert status == "in_progress"
         assert "0%" in message
+
+
+class TestMapProjectStatus:
+    """Tests for _map_project_status helper."""
+
+    def test_complete_with_errors(self) -> None:
+        """COMPLETE_WITH_ERRORS maps without losing precision."""
+        assert _map_project_status("COMPLETE_WITH_ERRORS") == "complete_with_errors"
+
+    def test_out_of_budget(self) -> None:
+        """OUT_OF_BUDGET maps without collapsing to failed."""
+        assert _map_project_status("OUT_OF_BUDGET") == "out_of_budget"
+
+    def test_unknown_fallback(self) -> None:
+        """Unknown statuses fall back to lowercase."""
+        assert _map_project_status("SOME_NEW_STATUS") == "some_new_status"
 
 
 class TestProveResultToDict:
@@ -251,6 +274,66 @@ class TestFormalizeResultToDict:
         )
         d = result.to_dict()
         assert d["percent_complete"] == 50
+
+
+class TestProjectResultToDict:
+    """Tests for ProjectResult.to_dict()."""
+
+    def test_with_metadata(self) -> None:
+        """Project metadata fields are included when present."""
+        result = ProjectResult(
+            status="complete",
+            project_id="project-123",
+            raw_status="COMPLETE",
+            percent_complete=100,
+            created_at="2026-04-25T00:00:00+00:00",
+            last_updated_at="2026-04-25T00:01:00+00:00",
+            input_prompt="Prove everything",
+            file_name="input.tar.gz",
+            description="Mock project",
+            output_summary="Done",
+            message="Project status: complete",
+        )
+
+        d = result.to_dict()
+
+        assert d["status"] == "complete"
+        assert d["project_id"] == "project-123"
+        assert d["raw_status"] == "COMPLETE"
+        assert d["percent_complete"] == 100
+        assert d["input_prompt"] == "Prove everything"
+        assert d["output_summary"] == "Done"
+
+    def test_none_values_excluded(self) -> None:
+        """Optional metadata is omitted when absent."""
+        result = ProjectResult(status="queued", project_id="project-123", message="Queued")
+        d = result.to_dict()
+
+        assert d["status"] == "queued"
+        assert "raw_status" not in d
+        assert "input_prompt" not in d
+
+
+class TestProjectFileResultToDict:
+    """Tests for ProjectFileResult.to_dict()."""
+
+    def test_with_output_path(self) -> None:
+        """Downloaded artifact path is included when present."""
+        result = ProjectFileResult(
+            status="saved",
+            project_id="project-123",
+            output_path="/tmp/result.tar.gz",
+            raw_status="COMPLETE",
+            percent_complete=100,
+            message="Saved",
+        )
+
+        d = result.to_dict()
+
+        assert d["status"] == "saved"
+        assert d["project_id"] == "project-123"
+        assert d["output_path"] == "/tmp/result.tar.gz"
+        assert d["raw_status"] == "COMPLETE"
 
 
 class TestCanonicalizePath:

@@ -9,9 +9,13 @@ import pytest
 os.environ["ARISTOTLE_MOCK"] = "true"
 
 from aristotle_mcp.tools import (
+    cancel_project,
     check_proof,
     check_prove_file,
     formalize,
+    get_input,
+    get_project,
+    get_solution,
     prove,
     prove_file,
 )
@@ -195,6 +199,38 @@ class TestFormalizeEdgeCases:
 
         # Should succeed (mock replaces sorry with trivial for generic)
         assert result.status == "proved"
+
+
+class TestProjectLifecycleEdgeCases:
+    """Edge case tests for project lifecycle tools."""
+
+    async def test_get_project_requires_project_id(self) -> None:
+        """Empty project IDs should be rejected before API calls."""
+        result = await get_project("")
+
+        assert result.status == "error"
+        assert "project_id" in result.message
+
+    async def test_cancel_project_requires_project_id(self) -> None:
+        """Empty project IDs should be rejected before API calls."""
+        result = await cancel_project("")
+
+        assert result.status == "error"
+        assert "project_id" in result.message
+
+    async def test_get_solution_requires_project_id(self) -> None:
+        """Empty project IDs should be rejected before API calls."""
+        result = await get_solution("")
+
+        assert result.status == "error"
+        assert "project_id" in result.message
+
+    async def test_get_input_requires_project_id(self) -> None:
+        """Empty project IDs should be rejected before API calls."""
+        result = await get_input("")
+
+        assert result.status == "error"
+        assert "project_id" in result.message
 
 
 class TestInputSizeLimits:
