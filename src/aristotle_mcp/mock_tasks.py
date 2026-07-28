@@ -46,6 +46,8 @@ async def list_project_tasks(
         offset = 0 if pagination_key is None else int(pagination_key)
     except ValueError:
         return _error("pagination_key must be an integer offset")
+    if offset < 0:
+        return _error("pagination_key must be a non-negative integer offset")
     with state.lock:
         project = state.projects.get(project_id)
         if project is None:

@@ -42,6 +42,19 @@ async def test_task_lifecycle_uses_native_task_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_project_tasks_rejects_negative_pagination_offset() -> None:
+    submission = await submit_project("Prove the theorem")
+    assert not isinstance(submission, ErrorResult)
+    project, _ = submission
+
+    result = await list_project_tasks(project.project_id, pagination_key="-1")
+
+    assert result == ErrorResult(
+        "error", "validation", "pagination_key must be a non-negative integer offset"
+    )
+
+
+@pytest.mark.asyncio
 async def test_wait_rejects_nonfinite_deadline() -> None:
     result = await wait_task("missing", timeout_seconds=float("nan"))
 
