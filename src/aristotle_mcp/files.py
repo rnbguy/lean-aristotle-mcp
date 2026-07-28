@@ -22,11 +22,19 @@ def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
     for candidate in candidates:
         try:
             fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            os.close(fd)
+            _close_reserved_descriptor(fd, candidate)
             return candidate
         except FileExistsError:
             continue
     raise RuntimeError(f"Could not find unique path after {max_attempts} attempts: {path}")
+
+
+def _close_reserved_descriptor(fd: int, path: str) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        _best_effort_remove(path)
+        raise
 
 
 def _safe_project_filename(project_id: str, suffix: str) -> str:
@@ -64,7 +72,7 @@ def _reserve_download_path(
     if overwrite:
         return absolute_path, False
     fd = os.open(absolute_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    os.close(fd)
+    _close_reserved_descriptor(fd, absolute_path)
     return absolute_path, True
 
 
@@ -234,5 +242,5 @@ def _reserve_output_path(path: str) -> str:
     canonical = _canonicalize_path(path)
     os.makedirs(os.path.dirname(canonical) or ".", exist_ok=True)
     descriptor = os.open(canonical, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    os.close(descriptor)
+    _close_reserved_descriptor(descriptor, canonical)
     return canonical

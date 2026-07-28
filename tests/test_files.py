@@ -16,6 +16,7 @@ from aristotle_mcp.files import (
     _find_unique_path,
     _remove_reserved_path,
     _reserve_download_path,
+    _reserve_output_path,
 )
 
 
@@ -52,6 +53,48 @@ def test_paths_and_reservation(tmp_path):
     with pytest.raises(FileExistsError):
         _reserve_download_path("p", str(tmp_path / "out"), ".tar.gz", False)
     assert os.path.getsize(reserved) == 0
+
+
+def test_find_unique_path_removes_placeholder_when_close_fails(tmp_path, monkeypatch):
+    path = tmp_path / "reserved"
+    original_close = os.close
+
+    def close_then_fail(descriptor):
+        original_close(descriptor)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(os, "close", close_then_fail)
+    with pytest.raises(OSError, match="close failed"):
+        _find_unique_path(str(path))
+    assert not path.exists()
+
+
+def test_reserve_download_path_removes_placeholder_when_close_fails(tmp_path, monkeypatch):
+    path = tmp_path / "reserved"
+    original_close = os.close
+
+    def close_then_fail(descriptor):
+        original_close(descriptor)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(os, "close", close_then_fail)
+    with pytest.raises(OSError, match="close failed"):
+        _reserve_download_path("project", str(path), ".tar.gz", False)
+    assert not path.exists()
+
+
+def test_reserve_output_path_removes_placeholder_when_close_fails(tmp_path, monkeypatch):
+    path = tmp_path / "reserved"
+    original_close = os.close
+
+    def close_then_fail(descriptor):
+        original_close(descriptor)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(os, "close", close_then_fail)
+    with pytest.raises(OSError, match="close failed"):
+        _reserve_output_path(str(path))
+    assert not path.exists()
 
 
 def test_archive_selection_and_atomic_copy(tmp_path):
