@@ -76,12 +76,12 @@ async def wait_task(
         task = state.tasks.get(task_id)
         if task is None:
             return _error(f"Unknown task ID: {task_id}")
-        question = _unanswered_question(task)
-        if question is not None:
-            return WaitTaskResult(
-                "waiting_for_answer", _task_result(task), question, "Task is waiting for an answer."
-            )
         if task.status not in _terminal_statuses():
+            question = _unanswered_question(task)
+            if question is not None:
+                return WaitTaskResult(
+                    "waiting_for_answer", _task_result(task), question, "Task is waiting for an answer."
+                )
             return WaitTaskResult(
                 "timed_out",
                 _task_result(task),

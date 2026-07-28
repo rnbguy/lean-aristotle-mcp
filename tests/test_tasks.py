@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import anyio
 import pytest
-from aristotlelib import AgentQuestionsSetting, EventStatus, EventType, TaskStatus
+from aristotlelib import AgentQuestionsSetting, EventStatus, EventType, ProjectStatus, TaskStatus
 
 from aristotle_mcp import tasks
 from aristotle_mcp.events import answer_question, get_event, list_task_events
@@ -103,6 +103,28 @@ async def test_timeout_question_setting_supports_public_answer_lifecycle() -> No
     assert fetched.explanation == "Use induction"
     assert not isinstance(second_wait, ErrorResult)
     assert second_wait.outcome == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_terminal_wait_precedes_unanswered_question() -> None:
+    submission = await submit_project(
+        "Prove the theorem",
+        agent_questions_setting=AgentQuestionsSetting.TIMEOUT_15_MIN,
+    )
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    state.tasks[task.task_id].status = TaskStatus.COMPLETE
+
+    waited = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+
+    assert not isinstance(waited, ErrorResult)
+    assert waited.outcome == "terminal"
+    assert waited.question is None
+    assert waited.task.status == "complete"
+    assert project.project_id == waited.task.project_id
+    assert state.projects[project.project_id].status is ProjectStatus.IDLE
 
 
 @pytest.mark.asyncio
