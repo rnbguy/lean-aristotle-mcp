@@ -131,6 +131,46 @@ def test_archive_rejects_escape_and_links(tmp_path):
         _extract_solution_archive(str(hardlink_archive), str(tmp_path / "extract-hardlink"))
 
 
+@pytest.mark.parametrize("member_type", [tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE])
+def test_archive_rejects_special_members_before_fallback_extraction(
+    tmp_path, monkeypatch, member_type
+):
+    archive = tmp_path / "special.tar.gz"
+    member = tarfile.TarInfo("special")
+    member.type = member_type
+    make_special_archive(archive, member)
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    monkeypatch.setattr(
+        tarfile.TarFile,
+        "extractall",
+        lambda *_args, **_kwargs: pytest.fail("unsafe special member reached extractall"),
+    )
+
+    with pytest.raises(ValueError):
+        _extract_solution_archive(str(archive), str(tmp_path / "extract"))
+
+
+@pytest.mark.filterwarnings("ignore:Python 3.14 will.*:DeprecationWarning")
+def test_regular_files_and_directories_extract_on_fallback(tmp_path, monkeypatch):
+    archive = tmp_path / "regular.tar.gz"
+    with tarfile.open(archive, "w:gz") as result:
+        directory = tarfile.TarInfo("directory")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        result.addfile(directory)
+        file = tarfile.TarInfo("directory/file.lean")
+        file.size = 1
+        file.mode = 0o644
+        result.addfile(file, io.BytesIO(b"x"))
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    extract_dir = tmp_path / "extract"
+
+    _extract_solution_archive(str(archive), str(extract_dir))
+
+    assert (extract_dir / "directory").is_dir()
+    assert (extract_dir / "directory" / "file.lean").read_text() == "x"
+
+
 def test_cleanup_logs_failures(tmp_path, caplog, monkeypatch):
     path = tmp_path / "reserved"
     path.write_text("")

@@ -4,7 +4,7 @@ import tarfile
 
 import pytest
 
-from aristotle_mcp import mock_tasks, mock_workflows, workflows
+from aristotle_mcp import files, mock_tasks, mock_workflows, workflows
 from aristotle_mcp.files import _copy_lean_from_solution_archive
 from aristotle_mcp.mock_state import reset_state, state
 from aristotle_mcp.models import (
@@ -723,9 +723,28 @@ async def test_archive_extraction_rejects_unsafe_member(
 
 
 @pytest.mark.asyncio
-async def test_production_workflow_classifies_unsafe_solution_archive_as_archive(
+@pytest.mark.parametrize(
+    ("member_name", "member_type", "cross_drive", "expected_message"),
+    [
+        ("../escape.lean", None, False, "Unsafe path in solution archive: ../escape.lean"),
+        ("link.lean", tarfile.SYMTYPE, False, "Unsafe link in solution archive: link.lean"),
+        ("link.lean", tarfile.LNKTYPE, False, "Unsafe link in solution archive: link.lean"),
+        (
+            "special",
+            tarfile.FIFOTYPE,
+            False,
+            "Unsafe special member in solution archive: special",
+        ),
+        ("proof.lean", None, True, "Unsafe path in solution archive: proof.lean"),
+    ],
+)
+async def test_production_workflow_classifies_unsafe_archive_members_as_archive(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    member_name: str,
+    member_type: bytes | None,
+    cross_drive: bool,
+    expected_message: str,
 ) -> None:
     monkeypatch.setenv("ARISTOTLE_MOCK", "false")
     source = tmp_path / "proof.lean"
@@ -733,9 +752,21 @@ async def test_production_workflow_classifies_unsafe_solution_archive_as_archive
     output = tmp_path / "output.lean"
     archive = tmp_path / "unsafe.tar.gz"
     with tarfile.open(archive, "w:gz") as result:
-        info = tarfile.TarInfo("../escape.lean")
-        info.size = 1
-        result.addfile(info, io.BytesIO(b"x"))
+        info = tarfile.TarInfo(member_name)
+        if member_type is None:
+            info.size = 1
+            result.addfile(info, io.BytesIO(b"x"))
+        else:
+            info.type = member_type
+            if member_type in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+                info.linkname = "target.lean"
+            result.addfile(info)
+
+    if cross_drive:
+        def fail_commonpath(_paths: list[str]) -> str:
+            raise ValueError("Paths have different drives")
+
+        monkeypatch.setattr(files.os.path, "commonpath", fail_commonpath)
 
     async def submit(_prompt: str, project_dir: str | None = None):
         _ = project_dir
@@ -759,6 +790,5 @@ async def test_production_workflow_classifies_unsafe_solution_archive_as_archive
 
     result = await workflows.prove_file(str(source), str(output))
 
-    assert result == ErrorResult(
-        "error", "archive", "Unsafe path in solution archive: ../escape.lean"
-    )
+    assert result == ErrorResult("error", "archive", expected_message)
+    assert not output.exists()

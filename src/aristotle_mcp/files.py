@@ -81,7 +81,13 @@ def _remove_reserved_path(path: str, reserved: bool) -> None:
 def _validate_archive_member(member_name: str, extract_dir: str) -> None:
     destination = os.path.realpath(os.path.join(extract_dir, member_name))
     extract_root = os.path.realpath(extract_dir)
-    if os.path.commonpath([extract_root, destination]) != extract_root:
+    try:
+        is_inside_extract_root = os.path.commonpath([extract_root, destination]) == extract_root
+    except ValueError as error:
+        raise _UnsafeArchiveMemberError(
+            f"Unsafe path in solution archive: {member_name}"
+        ) from error
+    if not is_inside_extract_root:
         raise _UnsafeArchiveMemberError(f"Unsafe path in solution archive: {member_name}")
 
 
@@ -91,6 +97,10 @@ def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
             _validate_archive_member(member.name, extract_dir)
             if member.issym() or member.islnk():
                 raise _UnsafeArchiveMemberError(f"Unsafe link in solution archive: {member.name}")
+            if not member.isfile() and not member.isdir():
+                raise _UnsafeArchiveMemberError(
+                    f"Unsafe special member in solution archive: {member.name}"
+                )
         if hasattr(tarfile, "data_filter"):
             tar.extractall(extract_dir, filter="data")
         else:
