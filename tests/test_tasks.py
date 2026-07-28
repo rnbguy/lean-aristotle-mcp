@@ -128,6 +128,25 @@ async def test_terminal_wait_precedes_unanswered_question() -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_wait_keeps_project_running_with_queued_sibling() -> None:
+    submission = await submit_project("Initial task")
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    continued = await continue_project(project.project_id, "Follow-up task")
+    assert not isinstance(continued, ErrorResult)
+    assert continued.status == "queued"
+    state.tasks[task.task_id].status = TaskStatus.COMPLETE
+
+    waited = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+
+    assert not isinstance(waited, ErrorResult)
+    assert waited.outcome == "terminal"
+    assert state.projects[project.project_id].status is ProjectStatus.RUNNING
+
+
+@pytest.mark.asyncio
 async def test_disabled_question_setting_creates_only_message_event() -> None:
     submission = await submit_project(
         "Prove the theorem",

@@ -93,7 +93,15 @@ async def wait_task(
             )
         project = state.projects.get(task.project_id)
         if project is not None:
-            project.status = ProjectStatus.IDLE
+            terminal_statuses = _terminal_statuses()
+            project.status = (
+                ProjectStatus.IDLE
+                if all(
+                    state.tasks[project_task_id].status in terminal_statuses
+                    for project_task_id in project.task_ids
+                )
+                else ProjectStatus.RUNNING
+            )
         return WaitTaskResult(
             "terminal",
             _task_result(task),
