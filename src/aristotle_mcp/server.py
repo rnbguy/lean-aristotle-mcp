@@ -25,7 +25,8 @@ mcp: FastMCP[None] = FastMCP(
     name="aristotle-mcp",
     instructions=(
         "Native aristotlelib 2.1 Project, AgentTask, and Event operations for Lean 4. "
-        "Use wait_task for bounded polling and answer_question for pending agent questions."
+        "Use wait_task for bounded polling and answer_question for pending agent questions. "
+        "The project must depend on Mathlib; generated-proof files need `import Mathlib.Tactic`."
     ),
 )
 
@@ -162,7 +163,8 @@ async def prove_tool(
     hint: str | None = None,
     wait: bool = True,
 ) -> JsonObject:
-    """Prove inline Lean staged as proof.lean with optional context and waiting."""
+    """Prove inline Lean in a Mathlib project; generated files need
+    `import Mathlib.Tactic`."""
     return (await prove(code, context_files, hint, wait)).to_dict()
 
 
@@ -172,7 +174,8 @@ async def prove_file_tool(
     output_path: str | None = None,
     wait: bool = True,
 ) -> JsonObject:
-    """Prove a Lean file from its nearest Lake root and optionally write output."""
+    """Prove a Lean file in a Mathlib project; generated files need
+    `import Mathlib.Tactic`."""
     return (await prove_file(file_path, output_path, wait)).to_dict()
 
 
@@ -183,7 +186,8 @@ async def formalize_tool(
     context_file: str | None = None,
     wait: bool = True,
 ) -> JsonObject:
-    """Formalize prose as formalize.lean; prove requests a theorem proof too."""
+    """Formalize prose in a Mathlib project; generated files need
+    `import Mathlib.Tactic`."""
     return (await formalize(description, prove, context_file, wait)).to_dict()
 
 

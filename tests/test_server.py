@@ -47,6 +47,18 @@ async def test_server_registers_exact_native_tool_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_server_describes_mathlib_tactic_requirement() -> None:
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+
+    assert "Mathlib" in (mcp.instructions or "")
+    assert "import Mathlib.Tactic" in (mcp.instructions or "")
+    assert "Mathlib" in (tools["prove"].description or "")
+    assert "import Mathlib.Tactic" in (tools["prove"].description or "")
+    assert "import Mathlib.Tactic" in (tools["prove_file"].description or "")
+    assert "import Mathlib.Tactic" in (tools["formalize"].description or "")
+
+
+@pytest.mark.asyncio
 async def test_server_submit_returns_native_project_and_task_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
