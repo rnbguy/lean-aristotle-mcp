@@ -163,6 +163,37 @@ async def test_cancel_keeps_project_running_with_queued_sibling() -> None:
     assert state.projects[project.project_id].status is ProjectStatus.RUNNING
 
 
+@pytest.mark.parametrize(
+    "terminal_status",
+    [
+        TaskStatus.COMPLETE,
+        TaskStatus.COMPLETE_WITH_ERRORS,
+        TaskStatus.OUT_OF_BUDGET,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELED,
+    ],
+)
+@pytest.mark.asyncio
+async def test_cancel_preserves_terminal_task_snapshot(terminal_status: TaskStatus) -> None:
+    submission = await submit_project("Initial task")
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    state.tasks[task.task_id].status = terminal_status
+    state.tasks[task.task_id].percent_complete = 42
+    state.tasks[task.task_id].last_updated_at = updated_at
+
+    canceled = await cancel_task(task.task_id)
+
+    assert not isinstance(canceled, ErrorResult)
+    assert canceled.status == terminal_status.value.lower()
+    assert canceled.percent_complete == 42
+    assert canceled.last_updated_at == updated_at.isoformat()
+    assert state.projects[project.project_id].status is ProjectStatus.IDLE
+
+
 @pytest.mark.asyncio
 async def test_disabled_question_setting_creates_only_message_event() -> None:
     submission = await submit_project(

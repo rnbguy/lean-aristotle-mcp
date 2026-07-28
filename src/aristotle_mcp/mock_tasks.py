@@ -156,9 +156,10 @@ async def cancel_task(task_id: str) -> TaskResult | ErrorResult:
         task = state.tasks.get(task_id)
         if task is None:
             return _error(f"Unknown task ID: {task_id}")
-        task.status = TaskStatus.CANCELED
-        task.percent_complete = 100
-        task.last_updated_at = now()
+        if task.status not in _terminal_statuses():
+            task.status = TaskStatus.CANCELED
+            task.percent_complete = 100
+            task.last_updated_at = now()
         project = state.projects.get(task.project_id)
         if project is not None:
             _update_project_status(project)
