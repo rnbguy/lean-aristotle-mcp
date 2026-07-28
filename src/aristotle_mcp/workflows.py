@@ -1,0 +1,220 @@
+"""Proof and formalization workflows composed from native operations."""
+
+from __future__ import annotations
+
+import os
+import tarfile
+import tempfile
+
+from aristotlelib import AristotleAPIError, Project
+from aristotlelib.local_file_utils import LeanProjectError
+
+from aristotle_mcp.config import is_mock_mode
+from aristotle_mcp.errors import error_result
+from aristotle_mcp.files import (
+    _canonicalize_path,
+    _copy_lean_from_solution_archive,
+    _lake_root,
+    _read_lean_from_solution_archive,
+    _reserve_output_path,
+    _stage_context_files,
+)
+from aristotle_mcp.models import ErrorResult, TaskResult, WaitTaskResult, WorkflowResult
+from aristotle_mcp.projects import submit_project
+from aristotle_mcp.tasks import wait_task
+
+
+def _submitted(project_id: str, task: TaskResult) -> WorkflowResult:
+    return WorkflowResult(
+        task.status,
+        project_id,
+        task.task_id,
+        None,
+        None,
+        task.output_summary,
+        "Project submitted.",
+    )
+
+
+def _after_wait(wait_result: WaitTaskResult) -> WorkflowResult:
+    task = wait_result.task
+    return WorkflowResult(
+        task.status,
+        task.project_id,
+        task.task_id,
+        None,
+        None,
+        task.output_summary,
+        wait_result.message,
+    )
+
+
+async def _download_code(project_id: str, preferred_filename: str | None = None) -> str | None:
+    project = await Project.from_id(project_id)
+    await project.refresh()
+    if not project.has_files:
+        return None
+    with tempfile.TemporaryDirectory() as directory:
+        archive_path = os.path.join(directory, "result.tar.gz")
+        downloaded = await project.get_files(archive_path)
+        return _read_lean_from_solution_archive(str(downloaded), preferred_filename)
+
+
+async def _copy_code(
+    project_id: str,
+    output_path: str,
+    preferred_filename: str | None,
+) -> str | None:
+    project = await Project.from_id(project_id)
+    await project.refresh()
+    if not project.has_files:
+        return None
+    with tempfile.TemporaryDirectory() as directory:
+        archive_path = os.path.join(directory, "result.tar.gz")
+        downloaded = await project.get_files(archive_path)
+        copied = _copy_lean_from_solution_archive(
+            str(downloaded),
+            output_path,
+            preferred_filename,
+        )
+        return output_path if copied else None
+
+
+async def _submit_and_wait(
+    directory: str,
+    prompt: str,
+    wait: bool,
+    output_path: str | None = None,
+    preferred_filename: str | None = None,
+) -> WorkflowResult | ErrorResult:
+    reserved_output: str | None = None
+    try:
+        if output_path is not None:
+            reserved_output = _reserve_output_path(output_path)
+        submission = await submit_project(prompt, project_dir=directory)
+        if isinstance(submission, ErrorResult):
+            return submission
+        project, task = submission
+        if task is None:
+            return ErrorResult("error", "api", "Submitted project has no task")
+        if not wait:
+            return _submitted(project.project_id, task)
+        waited = await wait_task(task.task_id)
+        if isinstance(waited, ErrorResult):
+            return waited
+        if waited.outcome != "terminal":
+            return _after_wait(waited)
+        if reserved_output is not None:
+            copied = await _copy_code(project.project_id, reserved_output, preferred_filename)
+            if copied is not None:
+                reserved_output = None
+            return WorkflowResult(
+                waited.task.status,
+                project.project_id,
+                waited.task.task_id,
+                None,
+                copied,
+                waited.task.output_summary,
+                "Workflow completed."
+                if copied is not None
+                else "Project has no downloadable Lean file.",
+            )
+        code = await _download_code(project.project_id, preferred_filename)
+        return WorkflowResult(
+            waited.task.status,
+            project.project_id,
+            waited.task.task_id,
+            code,
+            None,
+            waited.task.output_summary,
+            "Workflow completed." if code is not None else "Project has no downloadable Lean file.",
+        )
+    except (AristotleAPIError, LeanProjectError, OSError, tarfile.TarError, ValueError) as error:
+        return error_result(error)
+    finally:
+        if reserved_output is not None and os.path.exists(reserved_output):
+            os.unlink(reserved_output)
+
+
+async def prove(
+    code: str,
+    context_files: list[str] | None = None,
+    hint: str | None = None,
+    wait: bool = True,
+) -> WorkflowResult | ErrorResult:
+    """Submit a self-contained Lean proof request."""
+    if is_mock_mode():
+        from aristotle_mcp.mock_workflows import prove as mock_prove
+
+        return await mock_prove(code, context_files, hint, wait)
+    if not code.strip():
+        return ErrorResult("error", "validation", "code is required")
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "proof.lean"), "w", encoding="utf-8") as file:
+                if hint is not None:
+                    file.write(f"-- Hint: {hint}\n")
+                file.write(code)
+            _stage_context_files(directory, context_files or [], {"proof.lean"})
+            return await _submit_and_wait(
+                directory,
+                "Please prove all sorry statements.",
+                wait,
+                preferred_filename="proof.lean",
+            )
+    except (OSError, ValueError) as error:
+        return error_result(error)
+
+
+async def prove_file(
+    file_path: str,
+    output_path: str | None = None,
+    wait: bool = True,
+) -> WorkflowResult | ErrorResult:
+    """Submit the containing Lean project and optionally save its solved file."""
+    if is_mock_mode():
+        from aristotle_mcp.mock_workflows import prove_file as mock_prove_file
+
+        return await mock_prove_file(file_path, output_path, wait)
+    canonical = _canonicalize_path(file_path)
+    if not os.path.isfile(canonical):
+        return ErrorResult("error", "validation", f"File not found: {file_path}")
+    final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
+    return await _submit_and_wait(
+        _lake_root(canonical),
+        f"Please prove all sorry statements in {os.path.basename(canonical)}.",
+        wait,
+        _canonicalize_path(final_output) if wait else None,
+        os.path.basename(canonical),
+    )
+
+
+async def formalize(
+    description: str,
+    prove: bool = False,
+    context_file: str | None = None,
+    wait: bool = True,
+) -> WorkflowResult | ErrorResult:
+    """Submit a natural-language formalization request."""
+    if is_mock_mode():
+        from aristotle_mcp.mock_workflows import formalize as mock_formalize
+
+        return await mock_formalize(description, prove, context_file, wait)
+    if not description.strip():
+        return ErrorResult("error", "validation", "description is required")
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "description.txt"), "w", encoding="utf-8") as file:
+                file.write(description)
+            contexts = [context_file] if context_file is not None else []
+            _stage_context_files(directory, contexts, {"description.txt"})
+            suffix = " and prove it" if prove else ""
+            prompt = (
+                f"Formalize the provided description{suffix} and save the Lean result "
+                "as formalize.lean."
+            )
+            return await _submit_and_wait(
+                directory, prompt, wait, preferred_filename="formalize.lean"
+            )
+    except (OSError, ValueError) as error:
+        return error_result(error)
