@@ -3,12 +3,13 @@ from types import SimpleNamespace
 
 import anyio
 import pytest
-from aristotlelib import EventStatus, EventType, TaskStatus
+from aristotlelib import AgentQuestionsSetting, EventStatus, EventType, TaskStatus
 
 from aristotle_mcp import tasks
+from aristotle_mcp.events import answer_question, get_event, list_task_events
 from aristotle_mcp.mock_state import MockEvent, reset_state, state
 from aristotle_mcp.models import ErrorResult
-from aristotle_mcp.projects import submit_project
+from aristotle_mcp.projects import ask_project, continue_project, submit_project
 from aristotle_mcp.tasks import cancel_task, get_task, list_project_tasks, wait_task
 
 
@@ -69,6 +70,85 @@ async def test_mock_wait_reports_pending_question_and_timeout() -> None:
     assert question.outcome == "waiting_for_answer"
     assert not isinstance(timed_out, ErrorResult)
     assert timed_out.outcome == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_timeout_question_setting_supports_public_answer_lifecycle() -> None:
+    submission = await submit_project(
+        "Prove the theorem",
+        agent_questions_setting=AgentQuestionsSetting.TIMEOUT_15_MIN,
+    )
+
+    assert not isinstance(submission, ErrorResult)
+    _, task = submission
+    assert task is not None
+    first_wait = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+    listed = await list_task_events(task.task_id)
+    assert not isinstance(first_wait, ErrorResult)
+    assert first_wait.outcome == "waiting_for_answer"
+    assert first_wait.question is not None
+    assert not isinstance(listed, ErrorResult)
+    assert [event.event_type for event in listed.events] == ["agent_question", "message"]
+    assert listed.events[0].status == "sent"
+    answered = await answer_question(first_wait.question.event_id, "Use induction")
+    fetched = await get_event(first_wait.question.event_id)
+    second_wait = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+
+    assert not isinstance(answered, ErrorResult)
+    assert answered.status == "complete"
+    assert answered.explanation == "Use induction"
+    assert not isinstance(fetched, ErrorResult)
+    assert fetched.event_id == first_wait.question.event_id
+    assert fetched.status == "complete"
+    assert fetched.explanation == "Use induction"
+    assert not isinstance(second_wait, ErrorResult)
+    assert second_wait.outcome == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_disabled_question_setting_creates_only_message_event() -> None:
+    submission = await submit_project(
+        "Prove the theorem",
+        agent_questions_setting=AgentQuestionsSetting.DISABLED,
+    )
+
+    assert not isinstance(submission, ErrorResult)
+    _, task = submission
+    assert task is not None
+    listed = await list_task_events(task.task_id)
+    waited = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+
+    assert not isinstance(listed, ErrorResult)
+    assert [event.event_type for event in listed.events] == ["message"]
+    assert not isinstance(waited, ErrorResult)
+    assert waited.outcome == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_follow_ups_forward_timeout_question_setting() -> None:
+    submission = await submit_project("Initial task")
+
+    assert not isinstance(submission, ErrorResult)
+    project, _ = submission
+    continued = await continue_project(
+        project.project_id,
+        "Continue",
+        agent_questions_setting=AgentQuestionsSetting.TIMEOUT_15_MIN,
+    )
+    asked = await ask_project(
+        project.project_id,
+        "Explain",
+        agent_questions_setting=AgentQuestionsSetting.TIMEOUT_15_MIN,
+    )
+
+    for task in (continued, asked):
+        assert not isinstance(task, ErrorResult)
+        listed = await list_task_events(task.task_id)
+        waited = await wait_task(task.task_id, timeout_seconds=1, poll_interval_seconds=1)
+        assert not isinstance(listed, ErrorResult)
+        assert [event.event_type for event in listed.events] == ["agent_question", "message"]
+        assert not isinstance(waited, ErrorResult)
+        assert waited.outcome == "waiting_for_answer"
 
 
 @pytest.mark.asyncio

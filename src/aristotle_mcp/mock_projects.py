@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import assert_never
 
 from aristotlelib import AgentQuestionsSetting, EventStatus, EventType, ProjectStatus, TaskStatus
 
@@ -53,7 +54,9 @@ def _created_at(project: MockProject) -> datetime:
     return project.created_at
 
 
-def _add_task(project: MockProject, prompt: str) -> MockTask:
+def _add_task(
+    project: MockProject, prompt: str, agent_questions_setting: AgentQuestionsSetting
+) -> MockTask:
     timestamp = now()
     task = MockTask(
         project.project_id,
@@ -84,6 +87,26 @@ def _add_task(project: MockProject, prompt: str) -> MockTask:
     state.tasks[task.agent_task_id] = task
     state.events[event.event_id] = event
     task.event_ids.append(event.event_id)
+    match agent_questions_setting:
+        case AgentQuestionsSetting.DISABLED:
+            pass
+        case AgentQuestionsSetting.TIMEOUT_15_MIN:
+            question = MockEvent(
+                new_id("event"),
+                task.agent_task_id,
+                EventType.AGENT_QUESTION,
+                timestamp,
+                "What additional guidance should I use?",
+                None,
+                None,
+                None,
+                EventStatus.SENT,
+                None,
+            )
+            state.events[question.event_id] = question
+            task.event_ids.append(question.event_id)
+        case unreachable:
+            assert_never(unreachable)
     return task
 
 
@@ -105,7 +128,7 @@ async def submit_project(
     """Create a mock project and initial AgentTask."""
     if not prompt.strip():
         return _error("prompt is required")
-    _ = public_file_path, agent_questions_setting
+    _ = public_file_path
     timestamp = now()
     files = _files(project_dir, tar_file_path)
     project = MockProject(
@@ -120,7 +143,7 @@ async def submit_project(
     )
     with state.lock:
         state.projects[project.project_id] = project
-        task = _add_task(project, prompt)
+        task = _add_task(project, prompt, agent_questions_setting)
     return _project_result(project), _task_result(task)
 
 
@@ -163,7 +186,6 @@ async def continue_project(
     """Create an INSTRUCT task, accepting files only while idle."""
     if not prompt.strip():
         return _error("prompt is required")
-    _ = agent_questions_setting
     with state.lock:
         project = state.projects.get(project_id)
         if project is None:
@@ -177,7 +199,7 @@ async def continue_project(
                     return _error(f"Source path is not a file: {file_path}")
                 project.source_files[file_path.name] = file_path.read_bytes()
             project.has_files = True
-        return _task_result(_add_task(project, prompt))
+        return _task_result(_add_task(project, prompt, agent_questions_setting))
 
 
 async def ask_project(
@@ -187,11 +209,12 @@ async def ask_project(
 ) -> TaskResult | ErrorResult:
     if not prompt.strip():
         return _error("prompt is required")
-    _ = agent_questions_setting
     with state.lock:
         project = state.projects.get(project_id)
-        return _task_result(_add_task(project, prompt)) if project is not None else _error(
-            f"Unknown project ID: {project_id}"
+        return (
+            _task_result(_add_task(project, prompt, agent_questions_setting))
+            if project is not None
+            else _error(f"Unknown project ID: {project_id}")
         )
 
 
