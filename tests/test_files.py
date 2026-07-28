@@ -187,6 +187,30 @@ def test_regular_files_and_directories_extract_on_fallback(tmp_path, monkeypatch
     assert (extract_dir / "directory" / "file.lean").read_text() == "x"
 
 
+def test_fallback_normalizes_hostile_member_modes(tmp_path, monkeypatch):
+    archive = tmp_path / "mode-zero.tar.gz"
+    with tarfile.open(archive, "w:gz") as result:
+        directory = tarfile.TarInfo("directory")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0
+        result.addfile(directory)
+        file = tarfile.TarInfo("directory/file.lean")
+        file.size = 1
+        file.mode = 0
+        result.addfile(file, io.BytesIO(b"x"))
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    captured: list[tuple[str, int]] = []
+
+    def capture_extractall(tar, _path):
+        captured.extend((member.name, member.mode) for member in tar.getmembers())
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", capture_extractall)
+
+    _extract_solution_archive(str(archive), str(tmp_path / "extract"))
+
+    assert captured == [("directory", 0o700), ("directory/file.lean", 0o600)]
+
+
 def test_cleanup_logs_failures(tmp_path, caplog, monkeypatch):
     path = tmp_path / "reserved"
     path.write_text("")

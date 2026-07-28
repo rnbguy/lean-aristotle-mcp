@@ -93,7 +93,8 @@ def _validate_archive_member(member_name: str, extract_dir: str) -> None:
 
 def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
     with tarfile.open(solution_path, "r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        for member in members:
             _validate_archive_member(member.name, extract_dir)
             if member.issym() or member.islnk():
                 raise _UnsafeArchiveMemberError(f"Unsafe link in solution archive: {member.name}")
@@ -104,6 +105,8 @@ def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
         if hasattr(tarfile, "data_filter"):
             tar.extractall(extract_dir, filter="data")
         else:
+            for member in members:
+                member.mode = 0o700 if member.isdir() else 0o600
             tar.extractall(extract_dir)
 
 
