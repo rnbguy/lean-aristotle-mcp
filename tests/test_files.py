@@ -1,3 +1,4 @@
+import builtins
 import io
 import logging
 import os
@@ -28,6 +29,15 @@ def make_archive(path, members):
 def make_special_archive(path, member):
     with tarfile.open(path, "w:gz") as archive:
         archive.addfile(member)
+
+
+def force_fallback(monkeypatch):
+    def without_data_filter(value, name):
+        if value is tarfile and name == "data_filter":
+            return False
+        return builtins.hasattr(value, name)
+
+    monkeypatch.setattr(files, "hasattr", without_data_filter, raising=False)
 
 
 def test_paths_and_reservation(tmp_path):
@@ -78,6 +88,31 @@ def test_read_solution_archive_decodes_lean_as_utf8(tmp_path, monkeypatch):
     monkeypatch.setattr(files, "open", checked_open, raising=False)
 
     assert files._read_lean_from_solution_archive(str(archive)) == "-- caf\u00e9\n"
+
+
+def test_read_solution_archive_returns_content_when_cleanup_raises(tmp_path, monkeypatch):
+    archive = tmp_path / "solution.tar.gz"
+    make_archive(archive, [("solution.lean", b"proof")])
+
+    def fail_rmtree(*_args, **_kwargs):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+
+    assert files._read_lean_from_solution_archive(str(archive)) == "proof"
+
+
+def test_read_solution_archive_preserves_archive_error_when_cleanup_raises(tmp_path, monkeypatch):
+    archive = tmp_path / "invalid.tar.gz"
+    archive.write_bytes(b"not a gzip archive")
+
+    def fail_rmtree(*_args, **_kwargs):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+
+    with pytest.raises(tarfile.ReadError):
+        files._read_lean_from_solution_archive(str(archive))
 
 
 def test_archive_selection_matches_exact_directory_preferred_path(tmp_path):
@@ -155,7 +190,7 @@ def test_archive_rejects_special_members_before_fallback_extraction(
     member = tarfile.TarInfo("special")
     member.type = member_type
     make_special_archive(archive, member)
-    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    force_fallback(monkeypatch)
     monkeypatch.setattr(
         tarfile.TarFile,
         "extractall",
@@ -178,7 +213,7 @@ def test_regular_files_and_directories_extract_on_fallback(tmp_path, monkeypatch
         file.size = 1
         file.mode = 0o644
         result.addfile(file, io.BytesIO(b"x"))
-    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    force_fallback(monkeypatch)
     extract_dir = tmp_path / "extract"
 
     _extract_solution_archive(str(archive), str(extract_dir))
@@ -198,7 +233,7 @@ def test_fallback_normalizes_hostile_member_modes(tmp_path, monkeypatch):
         file.size = 1
         file.mode = 0
         result.addfile(file, io.BytesIO(b"x"))
-    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    force_fallback(monkeypatch)
     captured: list[tuple[str, int]] = []
 
     def capture_extractall(tar, _path):
@@ -221,6 +256,22 @@ def test_cleanup_logs_failures(tmp_path, caplog, monkeypatch):
     assert "Could not remove reserved download path" in caplog.text
 
 
+def test_best_effort_cleanup_logs_structured_failure(tmp_path, caplog, monkeypatch):
+    path = tmp_path / "temporary"
+    path.write_text("")
+
+    def fail_unlink(_path):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(os, "unlink", fail_unlink)
+    with caplog.at_level(logging.DEBUG):
+        files._best_effort_remove(str(path))
+
+    record = next(record for record in caplog.records if record.reason == "best_effort_cleanup")
+    assert record.cleanup_path == str(path)
+    assert record.recursive is False
+
+
 def test_atomic_copy_preserves_existing_on_failure(tmp_path, monkeypatch):
     archive = tmp_path / "solution.tar.gz"
     make_archive(archive, [("solution.lean", b"new")])
@@ -231,6 +282,70 @@ def test_atomic_copy_preserves_existing_on_failure(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         files._copy_lean_from_solution_archive(str(archive), str(output))
     assert output.read_text() == "old"
+
+
+def test_atomic_copy_succeeds_when_cleanup_raises(tmp_path, monkeypatch):
+    archive = tmp_path / "solution.tar.gz"
+    make_archive(archive, [("solution.lean", b"new")])
+    output = tmp_path / "out.lean"
+
+    def fail_rmtree(*_args, **_kwargs):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+
+    assert _copy_lean_from_solution_archive(str(archive), str(output))
+    assert output.read_text() == "new"
+
+
+def test_atomic_copy_preserves_primary_error_when_cleanup_raises(tmp_path, monkeypatch):
+    archive = tmp_path / "solution.tar.gz"
+    make_archive(archive, [("solution.lean", b"new")])
+    output = tmp_path / "out.lean"
+    output.write_text("old")
+
+    def fail_copy(*_args, **_kwargs):
+        raise OSError("copy failed")
+
+    def fail_rmtree(*_args, **_kwargs):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(files.shutil, "copy2", fail_copy)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+
+    with pytest.raises(OSError, match="copy failed"):
+        _copy_lean_from_solution_archive(str(archive), str(output))
+    assert output.read_text() == "old"
+
+
+def test_atomic_copy_preserves_copy_error_when_temporary_cleanup_raises(tmp_path, monkeypatch):
+    archive = tmp_path / "solution.tar.gz"
+    make_archive(archive, [("solution.lean", b"new")])
+    output = tmp_path / "out.lean"
+
+    def fail_copy(*_args, **_kwargs):
+        raise OSError("copy failed")
+
+    original_mkstemp = files.tempfile.mkstemp
+    original_unlink = files.os.unlink
+    temporary_paths: list[str] = []
+
+    def capture_mkstemp(*args, **kwargs):
+        descriptor, temporary_path = original_mkstemp(*args, **kwargs)
+        temporary_paths.append(temporary_path)
+        return descriptor, temporary_path
+
+    def fail_temporary_unlink(path, *args, **kwargs):
+        if str(path) == temporary_paths[0]:
+            raise OSError("cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(files.shutil, "copy2", fail_copy)
+    monkeypatch.setattr(files.tempfile, "mkstemp", capture_mkstemp)
+    monkeypatch.setattr(files.os, "unlink", fail_temporary_unlink)
+
+    with pytest.raises(OSError, match="copy failed"):
+        _copy_lean_from_solution_archive(str(archive), str(output))
 
 
 def test_duplicate_context_names():

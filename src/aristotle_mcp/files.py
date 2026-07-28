@@ -78,6 +78,26 @@ def _remove_reserved_path(path: str, reserved: bool) -> None:
         _logger.debug("Could not remove reserved download path: %s", path, exc_info=True)
 
 
+def _best_effort_remove(path: str | os.PathLike[str], *, recursive: bool = False) -> None:
+    try:
+        if recursive:
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        _logger.debug(
+            "Best-effort cleanup failed",
+            exc_info=True,
+            extra={
+                "reason": "best_effort_cleanup",
+                "cleanup_path": os.fspath(path),
+                "recursive": recursive,
+            },
+        )
+
+
 def _validate_archive_member(member_name: str, extract_dir: str) -> None:
     destination = os.path.realpath(os.path.join(extract_dir, member_name))
     extract_root = os.path.realpath(extract_dir)
@@ -145,7 +165,7 @@ def _read_lean_from_solution_archive(
         with open(lean_path, encoding="utf-8") as file:
             return file.read()
     finally:
-        shutil.rmtree(extract_dir)
+        _best_effort_remove(extract_dir, recursive=True)
 
 
 def _copy_lean_from_solution_archive(
@@ -169,8 +189,8 @@ def _copy_lean_from_solution_archive(
         return True
     finally:
         if temporary_path is not None:
-            os.unlink(temporary_path)
-        shutil.rmtree(extract_dir)
+            _best_effort_remove(temporary_path)
+        _best_effort_remove(extract_dir, recursive=True)
 
 
 def _duplicate_context_basename_error(
