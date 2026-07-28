@@ -159,6 +159,8 @@ async def list_projects(
         offset = 0 if pagination_key is None else int(pagination_key)
     except ValueError:
         return _error("pagination_key must be an integer offset")
+    if offset < 0:
+        return _error("pagination_key must be a non-negative integer offset")
     statuses = status if isinstance(status, list) else [status] if status is not None else []
     with state.lock:
         projects = sorted(state.projects.values(), key=_created_at, reverse=True)

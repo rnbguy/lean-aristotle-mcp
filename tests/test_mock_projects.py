@@ -54,6 +54,15 @@ async def test_project_submission_pagination_follow_up_and_download(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_list_projects_rejects_negative_pagination_offset() -> None:
+    result = await list_projects(pagination_key="-1")
+
+    assert result == ErrorResult(
+        "error", "validation", "pagination_key must be a non-negative integer offset"
+    )
+
+
+@pytest.mark.asyncio
 async def test_mock_submission_rejects_malformed_tar_before_state_mutation(tmp_path) -> None:
     archive = tmp_path / "project.tar.gz"
     archive.write_bytes(b"not a tar archive")
