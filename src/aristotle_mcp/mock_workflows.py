@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
+from aristotle_mcp.errors import error_result
 from aristotle_mcp.files import (
     _canonicalize_path,
     _lake_root,
@@ -120,7 +121,12 @@ async def prove_file(
     canonical = _canonicalize_path(file_path)
     if not os.path.isfile(canonical):
         return ErrorResult("error", "validation", f"File not found: {file_path}")
-    code = Path(canonical).read_text(encoding="utf-8")
+    try:
+        code = Path(canonical).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return ErrorResult("error", "validation", "File must be valid UTF-8.")
+    except OSError as error:
+        return error_result(error)
     final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
     lake_root = _lake_root(canonical)
     source_path = os.path.relpath(canonical, lake_root).replace(os.sep, "/")

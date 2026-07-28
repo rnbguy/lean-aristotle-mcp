@@ -196,7 +196,11 @@ async def prove_file(
     canonical = _canonicalize_path(file_path)
     if not os.path.isfile(canonical):
         return ErrorResult("error", "validation", f"File not found: {file_path}")
-    if os.path.getsize(canonical) > _MAX_FILE_SIZE:
+    try:
+        file_size = os.path.getsize(canonical)
+    except OSError as error:
+        return error_result(error)
+    if file_size > _MAX_FILE_SIZE:
         return ErrorResult(
             "error",
             "validation",
@@ -206,6 +210,13 @@ async def prove_file(
         from aristotle_mcp.mock_workflows import prove_file as mock_prove_file
 
         return await mock_prove_file(file_path, output_path, wait)
+    try:
+        with open(canonical, encoding="utf-8") as source:
+            source.read()
+    except UnicodeDecodeError:
+        return ErrorResult("error", "validation", "File must be valid UTF-8.")
+    except OSError as error:
+        return error_result(error)
     final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
     lake_root = _lake_root(canonical)
     source_path = os.path.relpath(canonical, lake_root).replace(os.sep, "/")

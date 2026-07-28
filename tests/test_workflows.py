@@ -169,6 +169,54 @@ async def test_prove_file_rejects_one_byte_over_limit_before_output_reservation(
 
 
 @pytest.mark.asyncio
+async def test_production_prove_file_translates_getsize_oserror_without_submission(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    reset_state()
+    source = tmp_path / "proof.lean"
+    source.write_text("theorem demo : True := by sorry")
+    output = tmp_path / "output.lean"
+
+    def fail_getsize(_path: str) -> int:
+        raise OSError("stat failed")
+
+    async def fail_submit(*_args, **_kwargs):
+        pytest.fail("source stat failures must not submit")
+
+    monkeypatch.setattr(workflows.os.path, "getsize", fail_getsize)
+    monkeypatch.setattr(workflows, "_submit_and_wait", fail_submit)
+
+    result = await workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult("error", "filesystem", "stat failed")
+    assert state.projects == {}
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_production_prove_file_rejects_invalid_utf8_without_submission(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    reset_state()
+    source = tmp_path / "proof.lean"
+    source.write_bytes(b"\xff")
+    output = tmp_path / "output.lean"
+
+    async def fail_submit(*_args, **_kwargs):
+        pytest.fail("invalid UTF-8 source must not submit")
+
+    monkeypatch.setattr(workflows, "_submit_and_wait", fail_submit)
+
+    result = await workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult("error", "validation", "File must be valid UTF-8.")
+    assert state.projects == {}
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
 async def test_prove_file_preserves_existing_output_and_context_collisions(tmp_path) -> None:
     source = tmp_path / "proof.lean"
     source.write_text("theorem demo : True := by sorry")
@@ -276,6 +324,41 @@ async def test_mock_prove_file_does_not_write_output_after_timeout(tmp_path) -> 
     assert result.code is None
     assert result.output_path is None
     assert result.message == "Task did not reach a terminal state before the timeout."
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_prove_file_translates_read_oserror_without_state_mutation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_state()
+    source = tmp_path / "proof.lean"
+    source.write_text("theorem demo : True := by sorry")
+    output = tmp_path / "output.lean"
+
+    def fail_read_text(_self, **_kwargs) -> str:
+        raise OSError("read failed")
+
+    monkeypatch.setattr(mock_workflows.Path, "read_text", fail_read_text)
+
+    result = await mock_workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult("error", "filesystem", "read failed")
+    assert state.projects == {}
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_prove_file_rejects_invalid_utf8_without_state_mutation(tmp_path) -> None:
+    reset_state()
+    source = tmp_path / "proof.lean"
+    source.write_bytes(b"\xff")
+    output = tmp_path / "output.lean"
+
+    result = await mock_workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult("error", "validation", "File must be valid UTF-8.")
+    assert state.projects == {}
     assert not output.exists()
 
 
