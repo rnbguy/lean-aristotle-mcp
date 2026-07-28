@@ -98,26 +98,25 @@ type-check: ## Run type checker (mypy)
 
 test: test-mock ## Run default tests (mock mode only)
 
-test-mock: ## Run mock mode tests (no API key needed)
-	ARISTOTLE_MOCK=true $(PYTEST) $(TEST_DIR) -v --ignore=$(TEST_DIR)/test_api.py --ignore=$(TEST_DIR)/test_api_tools.py
+test-mock: ## Run offline native mock tests
+	ARISTOTLE_MOCK=true $(PYTEST) $(TEST_DIR) -v --ignore=$(TEST_DIR)/test_live_api.py
 
-test-api: ## Run live API tests (requires ARISTOTLE_API_KEY)
-	@if [ -z "$$ARISTOTLE_API_KEY" ]; then \
+test-api: ## Run opt-in live tests (requires ARISTOTLE_API_KEY)
+	@set -a; \
+	if [ -f .env ]; then . ./.env; fi; \
+	set +a; \
+	if [ -z "$$ARISTOTLE_API_KEY" ]; then \
 		echo "$(RED)Error: ARISTOTLE_API_KEY not set$(NC)"; \
 		echo "Set it in .env or export it: export ARISTOTLE_API_KEY=your_key"; \
 		exit 1; \
-	fi
-	$(PYTEST) $(TEST_DIR)/test_api.py $(TEST_DIR)/test_api_tools.py -v --timeout=120
+	fi; \
+	ARISTOTLE_LIVE_TESTS=true $(PYTEST) $(TEST_DIR)/test_live_api.py -v --timeout=60
 
-test-all: test-mock ## Run all tests (mock + API if key available)
-	@if [ -n "$$ARISTOTLE_API_KEY" ]; then \
-		echo "$(GREEN)Running API tests...$(NC)"; \
-		$(PYTEST) $(TEST_DIR)/test_api.py $(TEST_DIR)/test_api_tools.py -v --timeout=120; \
-	else \
-		echo "$(YELLOW)Skipping API tests (ARISTOTLE_API_KEY not set)$(NC)"; \
-	fi
+test-all: test-mock ## Run offline tests; invoke test-api explicitly for paid checks
 
 test-lean: ## Verify the test Lean project builds
+	@echo "$(BLUE)Downloading Lean dependency cache...$(NC)"
+	cd $(LEAN_PROJECT) && lake exe cache get
 	@echo "$(BLUE)Building Lean test project...$(NC)"
 	cd $(LEAN_PROJECT) && lake build
 	@echo "$(GREEN)Lean project builds successfully$(NC)"
@@ -155,7 +154,7 @@ clean-all: clean ## Remove all generated files (build + test artifacts)
 	rm -rf $(LEAN_PROJECT)/build/
 	find $(LEAN_PROJECT) -name "*_aristotle.lean" -delete 2>/dev/null || true
 
-verify: check test test-lean ## Full verification (lint + type-check + tests + lean)
+verify: check test test-lean ## Offline verification (lint + type-check + tests + lean)
 	@echo ""
 	@echo "$(GREEN)All checks passed!$(NC)"
 
