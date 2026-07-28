@@ -105,10 +105,6 @@ async def submit_project(
     """Create a mock project and initial AgentTask."""
     if not prompt.strip():
         return _error("prompt is required")
-    if project_dir is not None and tar_file_path is not None:
-        return _error("Provide either project_dir or tar_file_path, not both")
-    if project_dir is not None and not Path(project_dir).is_dir():
-        return _error("project_dir must be an existing directory")
     _ = public_file_path, agent_questions_setting
     timestamp = now()
     files = _files(project_dir, tar_file_path)

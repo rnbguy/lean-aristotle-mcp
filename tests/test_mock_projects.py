@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from aristotlelib import ProjectStatus
 
-from aristotle_mcp import mock_downloads
+from aristotle_mcp import mock_downloads, mock_projects
 from aristotle_mcp.mock_state import reset_state, state
 from aristotle_mcp.models import ErrorResult
 from aristotle_mcp.projects import (
@@ -51,6 +51,69 @@ async def test_project_submission_pagination_follow_up_and_download(tmp_path) ->
     assert not isinstance(downloaded, ErrorResult)
     with tarfile.open(output, "r:gz") as archive:
         assert archive.getnames() == ["Main.lean"]
+
+
+@pytest.mark.asyncio
+async def test_mock_submission_rejects_malformed_tar_before_state_mutation(tmp_path) -> None:
+    archive = tmp_path / "project.tar.gz"
+    archive.write_bytes(b"not a tar archive")
+
+    result = await submit_project("prove", tar_file_path=str(archive))
+
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "validation"
+    assert state.projects == {}
+    assert state.tasks == {}
+    assert state.events == {}
+
+
+@pytest.mark.asyncio
+async def test_mock_submission_rejects_missing_tar_before_state_mutation(tmp_path) -> None:
+    result = await submit_project("prove", tar_file_path=str(tmp_path / "missing.tar.gz"))
+
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "filesystem"
+    assert state.projects == {}
+    assert state.tasks == {}
+    assert state.events == {}
+
+
+@pytest.mark.asyncio
+async def test_mock_submission_translates_collection_oserror_before_state_mutation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def collect_directory_files(root: Path) -> dict[str, bytes]:
+        _ = root
+        raise OSError("collection failed")
+
+    monkeypatch.setattr(mock_projects, "collect_directory_files", collect_directory_files)
+
+    result = await submit_project("prove", project_dir=str(tmp_path))
+
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "filesystem"
+    assert state.projects == {}
+    assert state.tasks == {}
+    assert state.events == {}
+
+
+@pytest.mark.asyncio
+async def test_mock_submission_rejects_both_source_forms_before_state_mutation(tmp_path) -> None:
+    archive = tmp_path / "project.tar"
+    with tarfile.open(archive, "w"):
+        pass
+
+    result = await submit_project(
+        "prove",
+        project_dir=str(tmp_path),
+        tar_file_path=str(archive),
+    )
+
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "validation"
+    assert state.projects == {}
+    assert state.tasks == {}
+    assert state.events == {}
 
 
 @pytest.mark.asyncio

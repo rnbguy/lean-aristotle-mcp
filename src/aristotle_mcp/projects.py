@@ -72,18 +72,18 @@ async def submit_project(
     agent_questions_setting: AgentQuestionsSetting = AgentQuestionsSetting.DISABLED,
 ) -> tuple[ProjectResult, TaskResult | None] | ErrorResult:
     """Submit a Project and return its initial AgentTask when available."""
-    if is_mock_mode():
-        from aristotle_mcp.mock_projects import submit_project as submit
-
-        return await submit(
-            prompt,
-            project_dir,
-            tar_file_path,
-            public_file_path,
-            agent_questions_setting,
-        )
     try:
         _validate_source(project_dir, tar_file_path)
+        if is_mock_mode():
+            from aristotle_mcp.mock_projects import submit_project as submit
+
+            return await submit(
+                prompt,
+                project_dir,
+                tar_file_path,
+                public_file_path,
+                agent_questions_setting,
+            )
         project = (
             await Project.create_from_directory(prompt, project_dir, agent_questions_setting)
             if project_dir is not None
