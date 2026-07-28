@@ -330,6 +330,30 @@ async def test_mock_prove_file_reserves_output_before_submission(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_mock_submit_translates_reservation_permission_error_without_submission(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output.lean"
+    submitted: list[str] = []
+
+    def fail_reservation(_path: str) -> str:
+        raise PermissionError("reservation denied")
+
+    async def submit(_prompt: str, project_dir: str | None = None) -> ErrorResult:
+        _ = project_dir
+        submitted.append("called")
+        return ErrorResult("error", "api", "unexpected")
+
+    monkeypatch.setattr(mock_workflows, "_reserve_output_path", fail_reservation)
+    monkeypatch.setattr(mock_workflows, "submit_project", submit)
+    result = await mock_workflows._submit(str(tmp_path), "prompt", True, "code", str(output))
+
+    assert result == ErrorResult("error", "filesystem", "reservation denied")
+    assert submitted == []
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
 async def test_mock_prove_file_does_not_write_output_after_timeout(tmp_path) -> None:
     reset_state()
     source = tmp_path / "proof.lean"

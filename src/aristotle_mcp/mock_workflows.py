@@ -33,8 +33,8 @@ async def _submit(
     if output_path is not None:
         try:
             reserved = _reserve_output_path(output_path)
-        except FileExistsError as error:
-            return ErrorResult("error", "filesystem", str(error))
+        except OSError as error:
+            return error_result(error)
     try:
         submission = await submit_project(prompt, project_dir=directory)
         if isinstance(submission, ErrorResult):
