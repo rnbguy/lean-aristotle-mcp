@@ -57,6 +57,28 @@ async def test_events_are_paginated_and_answered() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_task_events_rejects_negative_pagination_offset() -> None:
+    task = MockTask(
+        "project-1",
+        "task-1",
+        TaskStatus.IN_PROGRESS,
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+        0,
+        None,
+        None,
+        None,
+    )
+    state.tasks[task.agent_task_id] = task
+
+    result = await list_task_events(task.agent_task_id, pagination_key="-1")
+
+    assert result == ErrorResult(
+        "error", "validation", "pagination_key must be a non-negative integer offset"
+    )
+
+
+@pytest.mark.asyncio
 async def test_answer_rejects_missing_or_non_question_events() -> None:
     missing = await answer_question("missing", "yes")
 

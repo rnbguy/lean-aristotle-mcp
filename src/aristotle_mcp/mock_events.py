@@ -39,6 +39,8 @@ async def list_task_events(
         offset = 0 if pagination_key is None else int(pagination_key)
     except ValueError:
         return _error("pagination_key must be an integer offset")
+    if offset < 0:
+        return _error("pagination_key must be a non-negative integer offset")
     with state.lock:
         task = state.tasks.get(task_id)
         if task is None:
