@@ -186,6 +186,7 @@ async def download_project_files(
 
         return await download_mock_project_files(project_id, output_path, overwrite)
     reserved = False
+    committed = False
     temporary_path: str | None = None
     destination = ""
     try:
@@ -204,10 +205,11 @@ async def download_project_files(
         await project.get_files(temporary_path)
         os.replace(temporary_path, destination)
         temporary_path = None
+        committed = True
         return ProjectFilesResult("complete", project_id, destination, "Project files downloaded")
     except (AristotleAPIError, OSError, tarfile.TarError, ValueError) as error:
-        _remove_reserved_path(destination, reserved)
         return error_result(error)
     finally:
         if temporary_path is not None and os.path.exists(temporary_path):
             os.unlink(temporary_path)
+        _remove_reserved_path(destination, reserved and not committed)
