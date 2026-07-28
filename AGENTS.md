@@ -51,7 +51,7 @@ src/aristotle_mcp/
 `-- mock_*.py          Matching in-memory offline operations
 ```
 
-`server.py` registers FastMCP tools and delegates to domain modules. Production service operations use documented native `Project`, `AgentTask`, and `Event` methods and may catch the SDK's `LeanProjectError` local validation exception. Do not use `AristotleRequestClient`, direct HTTP, private SDK state, SDK interactive waiting, or `input()`.
+`server.py` constructs `MCPServer` and registers its tools before delegating to domain modules. Its MCP identity uses the name `aristotle-mcp` and the installed distribution version. Production service operations use documented native `Project`, `AgentTask`, and `Event` methods and may catch the SDK's `LeanProjectError` local validation exception. Do not use `AristotleRequestClient`, direct HTTP, private SDK state, SDK interactive waiting, or `input()`.
 
 `wait_task` has a finite deadline covering lookup, refresh, event paging, and polling. A successful wait returns `terminal`, `timed_out`, or `waiting_for_answer`; a lookup that expires before a task snapshot returns a structured `ErrorResult` because no `TaskResult` exists yet.
 
@@ -114,7 +114,10 @@ from scratch and verifies the fixture project used by file-oriented workflows.
 
 ## Type Checking And Tests
 
-The project uses strict mypy and keeps SDK boundary declarations in `stubs/aristotlelib/`. The `.pyi` stub exists because the runtime SDK does not expose every type detail required by this strict configuration. Keep the stub aligned with the verified SDK public contract, not with guesses about private SDK implementation.
+The project uses strict mypy and keeps the SDK boundary declarations it needs in
+`stubs/aristotlelib/` and `stubs/mcp/`. These `.pyi` subsets exist because the runtime SDKs do
+not expose every type detail required by this strict configuration. Keep them aligned with the
+verified public SDK contracts, not with guesses about private SDK implementation.
 
 Tests are organized by native domain: `test_projects.py`, `test_tasks.py`, `test_events.py`, `test_files.py`, `test_workflows.py`, `test_server.py`, and `test_sdk_contract.py`. `test_live_api.py` is excluded from ordinary pytest runs and is reached only by `make test-api`.
 
@@ -134,8 +137,6 @@ Keep external failures at the boundary as structured `ErrorResult` values. Prese
 
 ## Dependency And Documentation Policy
 
-Keep `aristotlelib>=2.1.0` as the authoritative SDK dependency. Before changing it, update
-the runtime contract test and the local stub from verified public SDK behavior. Do not infer
-new enums, fields, or methods from an older document or private source.
+Keep `aristotlelib>=2.1.0` and `mcp>=2.0.0,<3` as the authoritative runtime dependencies. Before changing either, update the runtime contract test and the local stub from verified public SDK behavior. Do not infer new enums, fields, or methods from an older document or private source.
 
 README documents onboarding and user workflows. `docs/ARISTOTLE_MCP_DESIGN.md` owns detailed schemas, call flows, safety rules, and rationale. `docs/USER_STORIES.md` owns practical MCP client examples. Keep all three consistent with `server.py`, `models.py`, and the tests.

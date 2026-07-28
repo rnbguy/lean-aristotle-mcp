@@ -42,7 +42,7 @@ The native 2.1 lifecycle is the server's public model. It makes ownership, work 
 ```text
 +-----------------+        MCP over stdio        +------------------+
 | MCP client      | <--------------------------> | aristotle-mcp    |
-| MCP client      |                              | FastMCP server   |
+| MCP client      |                              | MCPServer        |
 +-----------------+                              +--------+---------+
                                                             |
                                                             | public Python SDK
@@ -448,7 +448,8 @@ the values `true`, `1`, or `yes`, case-insensitively. The `aristotle://status` r
 reports `mock_mode`, `api_key_configured`, and `ready`; ready is true when either mock mode
 is enabled or an API key is configured.
 
-The production entry point configures the SDK before starting FastMCP on stdio. Configuration
+The production entry point configures the SDK before starting `MCPServer` on stdio. Its MCP
+identity uses the name `aristotle-mcp` and the installed distribution version. Configuration
 belongs to the MCP host environment. The server does not prompt for credentials, persist keys,
 or require a network connection while mock mode is active.
 
@@ -467,9 +468,12 @@ part of the ordinary offline commands.
 
 ## Dependencies And Type Checking
 
-The package requires Python 3.11 and includes `aristotlelib>=2.1.0`, `mcp`, `anyio`, `python-dotenv`, and `pathspec`. The server uses `anyio` for cancellable bounded waits and `pathspec` for project file selection.
+The package requires Python 3.11 and includes `aristotlelib>=2.1.0`, `mcp>=2.0.0,<3`, `anyio`, `python-dotenv`, and `pathspec`. The server uses `anyio` for cancellable bounded waits and `pathspec` for project file selection.
 
-Mypy runs with strict settings. `stubs/aristotlelib/` contains a `.pyi` declaration because the runtime SDK does not expose all type information needed by this project's strict checks. The stub must mirror verified public SDK behavior, not private implementation details.
+Mypy runs with strict settings. `stubs/aristotlelib/` and `stubs/mcp/` contain the `.pyi`
+declarations this project needs because the runtime SDKs do not expose all type information
+required by the strict checks. These subsets must mirror verified public SDK behavior, not
+private implementation details.
 
 ## Error Handling And Security
 
