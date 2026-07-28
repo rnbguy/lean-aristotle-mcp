@@ -87,7 +87,7 @@ wait_task("task-456", timeout_seconds=120, poll_interval_seconds=10)
 
 **Tools:** `prove`, `get_task`, and `wait_task`.
 
-**When to use:** Work is expected to take longer than one request should block. `wait_task` is not a hidden interactive loop. It returns only `terminal`, `timed_out`, or `waiting_for_answer`, with the latest Task state included in every response.
+**When to use:** Work is expected to take longer than one request should block. `wait_task` is not a hidden interactive loop. A successful wait returns only `terminal`, `timed_out`, or `waiting_for_answer`, with the latest Task state. If the initial lookup deadline expires before a task snapshot exists, it returns an API `ErrorResult` without task state.
 
 Terminal statuses are `complete`, `complete_with_errors`, `out_of_budget`, `failed`, and `canceled`. A workflow retrieves an artifact only for the first three, and a matching file may still be absent. Read `output_summary` and task Events. Do not infer a proof result from the task status alone.
 
