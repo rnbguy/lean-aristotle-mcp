@@ -93,6 +93,33 @@ async def test_download_uses_temporary_file_and_preserves_existing_on_failure(
 
 
 @pytest.mark.asyncio
+async def test_download_returns_primary_error_when_temporary_cleanup_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    output = tmp_path / "project.tar.gz"
+    project = _project()
+
+    async def get_files(destination: str) -> None:
+        Path(destination).write_bytes(b"partial")
+        raise OSError("interrupted")
+
+    async def from_id(project_id: str) -> SimpleNamespace:
+        assert project_id == "project-1"
+        return project
+
+    def fail_unlink(_path: str) -> None:
+        raise OSError("cleanup failed")
+
+    project.get_files = get_files
+    monkeypatch.setattr(projects.Project, "from_id", from_id)
+    monkeypatch.setattr(projects.os, "unlink", fail_unlink)
+    result = await projects.download_project_files("project-1", str(output))
+
+    assert result == ErrorResult("error", "filesystem", "interrupted")
+
+
+@pytest.mark.asyncio
 async def test_download_removes_reserved_paths_when_get_files_is_cancelled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

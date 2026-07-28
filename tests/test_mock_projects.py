@@ -276,3 +276,28 @@ async def test_mock_download_cleans_interrupted_temporary_write(
         assert output.read_bytes() == b"keep"
     else:
         assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_download_returns_primary_error_when_temporary_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "Main.lean").write_text("theorem main : True := by trivial\n")
+    submission = await submit_project("first", str(project_dir))
+    output = tmp_path / "project.tar.gz"
+
+    def fail_replace(_source: str, _destination: str) -> None:
+        raise OSError("interrupted")
+
+    def fail_unlink(_path: str) -> None:
+        raise OSError("cleanup failed")
+
+    assert not isinstance(submission, ErrorResult)
+    project, _ = submission
+    monkeypatch.setattr(mock_downloads.os, "replace", fail_replace)
+    monkeypatch.setattr(mock_downloads.os, "unlink", fail_unlink)
+    result = await mock_downloads.download_project_files(project.project_id, str(output))
+
+    assert result == ErrorResult("error", "filesystem", "Could not write project files")

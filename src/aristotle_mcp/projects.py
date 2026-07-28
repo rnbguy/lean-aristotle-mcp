@@ -19,7 +19,7 @@ from aristotlelib.local_file_utils import LeanProjectError
 
 from aristotle_mcp.config import is_mock_mode
 from aristotle_mcp.errors import error_result
-from aristotle_mcp.files import _remove_reserved_path, _reserve_download_path
+from aristotle_mcp.files import _best_effort_remove, _remove_reserved_path, _reserve_download_path
 from aristotle_mcp.models import (
     ErrorResult,
     ProjectFilesResult,
@@ -210,6 +210,6 @@ async def download_project_files(
     except (AristotleAPIError, OSError, tarfile.TarError, ValueError) as error:
         return error_result(error)
     finally:
-        if temporary_path is not None and os.path.exists(temporary_path):
-            os.unlink(temporary_path)
+        if temporary_path is not None:
+            _best_effort_remove(temporary_path)
         _remove_reserved_path(destination, reserved and not committed)

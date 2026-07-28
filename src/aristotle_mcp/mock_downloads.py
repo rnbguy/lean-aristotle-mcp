@@ -9,7 +9,7 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 
-from aristotle_mcp.files import _remove_reserved_path, _reserve_download_path
+from aristotle_mcp.files import _best_effort_remove, _remove_reserved_path, _reserve_download_path
 from aristotle_mcp.mock_state import MockProject, state
 from aristotle_mcp.models import ErrorResult, ProjectFilesResult
 
@@ -70,8 +70,8 @@ async def download_project_files(
         _remove_reserved_path(destination, reserved)
         return ErrorResult("error", "filesystem", "Could not write project files")
     finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+        if temporary is not None:
+            _best_effort_remove(temporary)
     return ProjectFilesResult(
         "complete",
         project_id,
