@@ -1,45 +1,44 @@
 # TODO
 
-Ideas and potential improvements for the Aristotle MCP server.
+Ideas and follow-ups for the native Aristotle 2.1 MCP surface.
 
-## Completed
+## Completed In The Native Migration
 
-- ✅ **Split check vs save for async proofs** - Added `save` parameter (default `False`) to `check_prove_file`
-- ✅ **Async support for formalize** - Added `wait` parameter and `check_formalize` tool
-- ✅ **Clarify "check" vs "poll" terminology** - Updated all documentation to use "poll" consistently
-- ✅ **Project lifecycle tools** - Added `get_project`, `cancel_project`, `get_solution`, `get_solution_if_complete`, and `get_input`
+- The legacy project-job model, `check_*` polling tools, and separate solution/input download tools were replaced by native Project, AgentTask, and Event operations.
+- Project listing is now available through `list_projects`, using native pagination and status filters.
+- Bounded `wait_task` polling replaces interactive waiting and stops for a terminal task, timeout, or pending agent question.
+- Lean workflows submit Projects and return both project and task IDs. `prove_file` writes a matching Lean output only while waiting.
+- Archive handling now reserves output paths and rejects unsafe solution archive members before extraction.
 
-## Feature Ideas
+## Maintenance
 
-### Prove single theorem from file
-The `prove` tool handles code snippets but isn't file-aware. Could add:
-- `prove_theorem(file_path, theorem_name)` to prove a specific theorem
-- Would need to parse Lean file and extract the theorem with its context
-- Useful when you only want to prove one thing without waiting for the whole file
+### Keep The SDK Contract Current
 
-### Deliberately omit project listing
-Do not expose `Project.list_projects()` through this MCP.
-- Aristotle project listing is account-level, not workspace-level
-- It can reveal projects unrelated to the current sandboxed codebase
-- Project lifecycle tools should require an explicit project ID
+Keep `tests/test_sdk_contract.py` aligned with the installed `aristotlelib>=2.1.0` public models, enums, and signatures. In particular, verify native Project, AgentTask, and Event fields before documenting a dependency upgrade.
 
-### Rename polling tools
-Consider renaming `check_*` tools to `poll_*` in a future breaking change:
-- `check_proof` → `poll_proof`
-- `check_prove_file` → `poll_prove_file`
-- `check_formalize` → `poll_formalize`
+The local `.pyi` stub exists because this project runs mypy in strict mode with `disallow_any_unimported` and the SDK's runtime package does not provide every type detail needed by that check. It is a type-checking boundary, not a second implementation of the SDK. Update it only alongside a verified public SDK contract change.
 
-This would make it clearer these are for polling async jobs, not validating proofs.
+### Live Service Checks
 
-## Installation / Configuration
+Run `make test-api` only when a real integration check is needed. It requires an API key, is bounded, and creates test-owned live Projects. Do not make it part of the default offline suite and do not describe it as having run unless it actually did.
 
-### API key configuration for git-based installs
-When users install MCP servers by pointing at a git repo (e.g., `uvx`, `npx`), how do they provide their API key?
+## Possible Future Work
 
-Options to explore:
-- Environment variable (current approach) - works but requires manual setup
-- Config file in user's home directory (e.g., `~/.config/aristotle/config.json`)
-- Interactive prompt on first run?
-- MCP resource that returns setup instructions if not configured?
+### Declaration-Level Requests
 
-Need to document the recommended approach clearly.
+`prove` is useful for a focused snippet and `prove_file` submits the nearest Lake project. Before adding any declaration-level workflow, establish whether the SDK already supports that request shape.
+
+If it does not, a parser would need to preserve imports, namespaces, local notation, and dependent declarations. That would be a separate feature, not a wrapper around the current file workflow.
+
+### Project And Task Presentation
+
+The MCP intentionally passes native statuses through rather than translating them into made-up proof states. If clients need a higher-level presentation, add it as documentation or client behavior first. Do not add another server-side job state machine unless native status information becomes insufficient.
+
+### Configuration
+
+Environment variables remain the supported configuration surface:
+
+- `ARISTOTLE_API_KEY` configures the live SDK.
+- `ARISTOTLE_MOCK=true` enables the offline in-memory implementation.
+
+Avoid interactive setup. MCP servers run over stdio and `wait_task` is intentionally noninteractive, so configuration should be supplied by the MCP host.
