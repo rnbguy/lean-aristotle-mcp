@@ -19,7 +19,7 @@ def _agent_questions_setting() -> JsonObject:
 
 
 @pytest.mark.asyncio
-async def test_server_input_schemas_match_mcp_1_28_1_contract() -> None:
+async def test_server_input_schemas_match_public_contract() -> None:
     expected: dict[str, JsonObject] = {
         "submit_project": {
             "$defs": {
@@ -219,5 +219,7 @@ async def test_server_input_schemas_match_mcp_1_28_1_contract() -> None:
     tools = await mcp.list_tools()
 
     assert {tool.name for tool in tools} == set(expected)
-    assert {tool.name: tool.inputSchema for tool in tools} == expected
-    assert all(tool.outputSchema is None for tool in tools)
+    assert {tool.name: tool.input_schema for tool in tools} == expected
+    assert all(tool.output_schema is None for tool in tools)
+    assert {tool.name: tool.model_dump(by_alias=True)["inputSchema"] for tool in tools} == expected
+    assert all(tool.model_dump(by_alias=True)["outputSchema"] is None for tool in tools)

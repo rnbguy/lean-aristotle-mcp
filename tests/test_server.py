@@ -26,7 +26,7 @@ async def test_server_registers_exact_native_tool_surface() -> None:
         "prove_file",
         "formalize",
     }
-    schemas = {tool.name: tool.inputSchema for tool in tools}
+    schemas = {tool.name: tool.input_schema for tool in tools}
     assert all(tool.description for tool in tools)
     assert set(schemas["submit_project"]["properties"]) == {
         "prompt",

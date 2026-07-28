@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from aristotlelib import AgentQuestionsSetting, ProjectStatus
-from mcp.server import FastMCP
+from mcp.server import MCPServer
 
 from aristotle_mcp.config import configure_sdk, has_api_key, is_mock_mode
 from aristotle_mcp.events import answer_question, get_event, list_task_events
@@ -21,7 +21,7 @@ from aristotle_mcp.projects import (
 from aristotle_mcp.tasks import cancel_task, get_task, list_project_tasks, wait_task
 from aristotle_mcp.workflows import formalize, prove, prove_file
 
-mcp: FastMCP[None] = FastMCP(
+mcp: MCPServer[None] = MCPServer(
     name="aristotle-mcp",
     instructions=(
         "Native aristotlelib 2.1 Project, AgentTask, and Event operations for Lean 4. "
