@@ -154,10 +154,11 @@ def test_models_are_frozen_and_slotted() -> None:
         value = "idle"
         setattr(result, attribute, value)
 
-    with pytest.raises(AttributeError):
+    with pytest.raises((AttributeError, TypeError)):
         attribute = "extra"
         value = "value"
         setattr(result, attribute, value)
+    assert not hasattr(result, "extra")
 
 
 def test_all_dtos_are_frozen_slotted_and_json_serializable() -> None:
