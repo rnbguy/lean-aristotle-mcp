@@ -136,6 +136,38 @@ async def test_cancelled_mock_task_allows_file_follow_up(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mock_continue_rejects_mixed_files_without_mutating_state(tmp_path) -> None:
+    submission = await submit_project("initial")
+    valid_file = tmp_path / "Context.lean"
+    valid_file.write_text("theorem context : True := by trivial\n")
+    missing_file = tmp_path / "Missing.lean"
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    canceled = await cancel_task(task.task_id)
+    source_files = state.projects[project.project_id].source_files.copy()
+    has_files = state.projects[project.project_id].has_files
+    task_ids = state.projects[project.project_id].task_ids.copy()
+    tasks = state.tasks.copy()
+    events = state.events.copy()
+
+    result = await continue_project(
+        project.project_id,
+        "continue",
+        [str(valid_file), str(missing_file)],
+    )
+
+    assert not isinstance(canceled, ErrorResult)
+    assert isinstance(result, ErrorResult)
+    assert state.projects[project.project_id].source_files == source_files
+    assert state.projects[project.project_id].has_files == has_files
+    assert state.projects[project.project_id].task_ids == task_ids
+    assert state.tasks == tasks
+    assert state.events == events
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("overwrite", [False, True])
 async def test_mock_download_replaces_destination_from_sibling_temporary_file(
     tmp_path, monkeypatch: pytest.MonkeyPatch, overwrite: bool

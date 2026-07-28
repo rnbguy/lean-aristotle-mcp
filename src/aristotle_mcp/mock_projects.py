@@ -193,11 +193,13 @@ async def continue_project(
         if files and project.status is not ProjectStatus.IDLE:
             return _error("Files can only be uploaded when the project is idle")
         if files:
+            uploaded_files: dict[str, bytes] = {}
             for path in files:
                 file_path = Path(path)
                 if not file_path.is_file():
                     return _error(f"Source path is not a file: {file_path}")
-                project.source_files[file_path.name] = file_path.read_bytes()
+                uploaded_files[file_path.name] = file_path.read_bytes()
+            project.source_files.update(uploaded_files)
             project.has_files = True
         return _task_result(_add_task(project, prompt, agent_questions_setting))
 
