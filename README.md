@@ -146,14 +146,18 @@ wait_task(task_id="task-...", timeout_seconds=300, poll_interval_seconds=5)
 -> {"outcome": "terminal", "task": {"status": "complete", ...}, "question": null, ...}
 ```
 
-`wait_task` never calls `AgentTask.wait_for_completion` or `input()`. Its finite deadline covers initial lookup, refreshes, event paging, and polling. A successful wait has outcome `terminal`, `timed_out`, or `waiting_for_answer`; if lookup expires before a task snapshot exists, it returns a structured API error because no `TaskResult` can be returned.
+`wait_task` never calls `AgentTask.wait_for_completion` or `input()`. Its finite deadline covers initial lookup, refreshes, event paging, and polling. A successful wait has outcome `terminal`, `timed_out`, or `waiting_for_answer`; terminal status takes precedence over a pending question. If lookup expires before a task snapshot exists, it returns a structured API error because no `TaskResult` can be returned.
 
 ### Answer Agent Questions
 
 An `ASK` follow-up asks the agent a question about a Project. An `INSTRUCT` follow-up continues work with instructions and may upload files. Use `continue_project` for `INSTRUCT`; uploaded files are accepted only while the native Project is `idle`.
 
 ```text
-ask_project(project_id="project-...", prompt="Which theorem should I prove next?")
+ask_project(
+  project_id="project-...",
+  prompt="Which theorem should I prove next?",
+  agent_questions_setting=2  # AgentQuestionsSetting.TIMEOUT_15_MIN
+)
 -> {"task_id": "task-...", "status": "queued", ...}
 
 wait_task(task_id="task-...", timeout_seconds=60)
@@ -165,7 +169,7 @@ wait_task(task_id="task-...", timeout_seconds=60)
 answer_question(event_id="event-...", answer="Prove the induction lemma first.")
 ```
 
-`answer_question` accepts only a pending `sent` agent-question event. Use `list_task_events` or `get_event` when the question needs more context. Events include content plus optional file path, explanation, suggestions, and duration.
+Set `agent_questions_setting=2` (`AgentQuestionsSetting.TIMEOUT_15_MIN`) when creating an `ASK` follow-up that should permit agent questions. The default is `DISABLED`. `answer_question` accepts only a pending `sent` agent-question event. Use `list_task_events` or `get_event` when the question needs more context. Events include content plus optional file path, explanation, suggestions, and duration.
 
 ### Retrieve Files Safely
 
@@ -190,7 +194,7 @@ prove(
 -> {"project_id": "project-...", "task_id": "task-...", "status": "queued", ...}
 ```
 
-With `wait=true`, the workflow waits through `wait_task` and returns the contents of `proof.lean` when the completed Project has a matching downloadable file. A terminal task can still have no downloadable Lean output, and that case is reported in `message` rather than invented as a proof result.
+With `wait=true`, the workflow waits through `wait_task` and returns the contents of `proof.lean` only for `complete`, `complete_with_errors`, or `out_of_budget`, when the archive contains an exact matching file. `failed`, `canceled`, and nonterminal outcomes have no artifact. A matching file may still be absent, which is reported in `message` rather than invented as a proof result.
 
 ### Prove A File In Its Lake Project
 
@@ -207,7 +211,7 @@ prove_file("tests/lean_project/TestProject/Basic.lean")
    }
 ```
 
-When waiting, the default output filename is the input basename with `_aristotle.lean` inserted before the extension. The workflow extracts only the matching original basename from the result archive and writes it atomically. With `wait=false`, no output path is reserved or written; retain both IDs and later use `wait_task`, task events, and project downloads.
+When waiting, the default output filename is the input basename with `_aristotle.lean` inserted before the extension. The requested-file identity and archive match use the path relative to the submitted Lake root, such as `TestProject/Basic.lean`, not just its basename. Artifacts are retrieved only for `complete`, `complete_with_errors`, or `out_of_budget`; `failed`, `canceled`, and nonterminal outcomes have no artifact, and a matching file may still be absent. With `wait=false`, no output path is reserved or written; retain both IDs and later use `wait_task`, task events, and project downloads.
 
 ### Formalize Natural Language
 
@@ -271,7 +275,7 @@ Do not use a removed `check_*` tool. Call `get_task` for one state refresh or `w
 
 ### A Workflow Did Not Return Lean Code
 
-The native task may reach a terminal status without a downloadable matching Lean file. Read `status`, `output_summary`, and `message`; inspect task events; then use `download_project_files` if the whole project archive is needed. `prove_file` writes only the matching requested Lean basename when it is present.
+Terminal task statuses are `complete`, `complete_with_errors`, `out_of_budget`, `failed`, and `canceled`. Workflows retrieve artifacts only for the first three. Read `status`, `output_summary`, and `message`; inspect task events; then use `download_project_files` if the whole project archive is needed. `prove_file` writes only an exact Lake-relative match when it is present.
 
 ## License And Links
 

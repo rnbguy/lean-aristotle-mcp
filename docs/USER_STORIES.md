@@ -66,7 +66,7 @@ AI: "It is still running. I retained both IDs and can wait again later."
 
 **When to use:** The input file belongs to a Lake project. `prove_file` searches upward for the nearest `lakefile.lean`, `lakefile.toml`, or `lean-toolchain`, then submits that directory rather than guessing at the workspace root.
 
-When `wait=true`, `prove_file` writes a matching result to `Theorems_aristotle.lean` by default. It only writes the requested Lean basename when the completed project archive contains it.
+When `wait=true`, `prove_file` writes a matching result to `Theorems_aristotle.lean` by default. Its requested-file identity and exact archive match use the path relative to the submitted Lake root, such as `MyProject/Theorems.lean`, not just the basename. It retrieves an artifact only for `complete`, `complete_with_errors`, or `out_of_budget`; `failed`, `canceled`, and nonterminal outcomes have no artifact, and a matching file may still be absent.
 
 ## Story 3: Bounded Waiting For A Long-Running Task
 
@@ -89,7 +89,7 @@ wait_task("task-456", timeout_seconds=120, poll_interval_seconds=10)
 
 **When to use:** Work is expected to take longer than one request should block. `wait_task` is not a hidden interactive loop. It returns only `terminal`, `timed_out`, or `waiting_for_answer`, with the latest Task state included in every response.
 
-If the task reaches a terminal status but a workflow has no matching Lean output, read `output_summary` and task Events. Do not infer a proof result from the task status alone.
+Terminal statuses are `complete`, `complete_with_errors`, `out_of_budget`, `failed`, and `canceled`. A workflow retrieves an artifact only for the first three, and a matching file may still be absent. Read `output_summary` and task Events. Do not infer a proof result from the task status alone.
 
 ## Story 4: An Agent Needs An Answer
 
@@ -100,7 +100,8 @@ If the task reaches a terminal status but a workflow has no matching Lean output
 ```text
 ask_project(
   project_id="project-123",
-  prompt="Which statement should receive the next proof attempt?"
+  prompt="Which statement should receive the next proof attempt?",
+  agent_questions_setting=2  # AgentQuestionsSetting.TIMEOUT_15_MIN
 )
 -> {"task_id": "task-789", "status": "queued", ...}
 
@@ -125,7 +126,7 @@ wait_task("task-789", timeout_seconds=60)
 
 **Tools:** `ask_project`, `wait_task`, `get_event`, `list_task_events`, and `answer_question`.
 
-**When to use:** `wait_task` returns `waiting_for_answer` or task Events show a `sent` `agent_question`. Keep the `event_id`; `project_id` and `task_id` cannot substitute for it.
+**When to use:** Pass `agent_questions_setting=2` (`AgentQuestionsSetting.TIMEOUT_15_MIN`) when creating the follow-up. The default is `DISABLED`. `wait_task` returns `waiting_for_answer` or task Events show a `sent` `agent_question`. Keep the `event_id`; `project_id` and `task_id` cannot substitute for it. If the task is terminal, `wait_task` reports `terminal` before checking for a question.
 
 ## Story 5: Continue A Project With Instructions And Files
 

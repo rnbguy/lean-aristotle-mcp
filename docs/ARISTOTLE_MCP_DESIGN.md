@@ -113,7 +113,9 @@ Project and Event enum names in lower case, and serializes TaskStatus values in 
 The server reports the native Project status without predicting or synthesizing Project
 transitions. A task can be observed in a nonterminal state such as `queued` or
 `in_progress` and is terminal only at `complete`, `complete_with_errors`, `out_of_budget`,
-`failed`, or `canceled`.
+`failed`, or `canceled`. Terminal status takes precedence over a pending question during a
+wait. Workflows retrieve artifacts only for `complete`, `complete_with_errors`, and
+`out_of_budget`; `failed`, `canceled`, and nonterminal outcomes have no artifact.
 
 Events are historical records rather than a second task status channel. A pending question
 is specifically an `agent_question` Event with `sent` status and no explanation. Once it is
@@ -256,6 +258,9 @@ additional work, including optional file input. Use `ASK` to ask the agent a que
 the Project. In both cases, the service creates an AgentTask that has its own task ID and
 Events. A caller that needs to continue observing work must use that new task ID.
 
+The default `agent_questions_setting` is `DISABLED`. To permit a question, pass
+`AgentQuestionsSetting.TIMEOUT_15_MIN`, whose MCP wire value is `2`.
+
 ### Project Call Flow
 
 ```text
@@ -301,7 +306,7 @@ It does not use the SDK's interactive waiting API and never reads from standard 
 }
 ```
 
-For `waiting_for_answer`, `question` is the newest pending agent-question Event. For `terminal`, it is null and `task.status` is one of the native terminal statuses. A timeout is an outcome, not a fabricated task status.
+For `waiting_for_answer`, `question` is the newest pending agent-question Event. For `terminal`, it is null and `task.status` is one of the native terminal statuses. Terminal status is checked before pending questions. A timeout is an outcome, not a fabricated task status.
 
 ### Bounded Waiting Call Flow
 
@@ -383,13 +388,13 @@ The status is the native task status. `code` and `output_path` are transport res
 
 `prove(code, context_files=None, hint=None, wait=True)` writes the supplied Lean source to `proof.lean` in a temporary directory. An optional hint becomes a Lean comment at the start of that staged file. The plural `context_files` list is copied into the staging directory after path checks, and no staged context may collide with `proof.lean`.
 
-The prompt requests that Aristotle prove all `sorry` statements. With `wait=false`, the result immediately contains the Project and task IDs. With `wait=true`, the workflow calls bounded `wait_task` and, after a terminal completion, downloads the project archive and reads the matching `proof.lean` when present.
+The prompt requests that Aristotle prove all `sorry` statements. With `wait=false`, the result immediately contains the Project and task IDs. With `wait=true`, the workflow calls bounded `wait_task` and downloads the project archive only for `complete`, `complete_with_errors`, or `out_of_budget`, then reads the exact matching `proof.lean` when present. `failed`, `canceled`, and nonterminal outcomes have no artifact; a matching file may still be absent.
 
 ### `prove_file`
 
 `prove_file(file_path, output_path=None, wait=True)` requires an existing file. It searches upward from that file for the nearest `lakefile.lean`, `lakefile.toml`, or `lean-toolchain`, then submits that directory. If no marker is found, it submits the file's containing directory.
 
-The workflow asks to prove the supplied file's basename. When waiting, its default output is the canonical input path with `_aristotle.lean` appended before the extension. It reserves this output before submission, selects the matching original basename from the result archive, validates the archive, and writes the file atomically. With `wait=false`, it neither reserves nor writes a local output.
+The workflow asks to prove the file's path relative to the submitted Lake root. When waiting, its default output is the canonical input path with `_aristotle.lean` appended before the extension. It reserves this output before submission, selects an exact match for that Lake-relative path from the result archive, validates the archive, and writes the file atomically. Artifacts are retrieved only for `complete`, `complete_with_errors`, or `out_of_budget`; `failed`, `canceled`, and nonterminal outcomes have no artifact, and a matching file may still be absent. With `wait=false`, it neither reserves nor writes a local output.
 
 ### `formalize`
 
@@ -406,7 +411,7 @@ prove
 
 prove_file
   -> canonicalize file path and discover nearest Lake root
-  -> submit_project(root, prompt naming the requested basename)
+  -> submit_project(root, prompt naming the Lake-relative requested file)
 
 formalize
   -> temporary directory with description.txt and optional context file
@@ -415,13 +420,13 @@ formalize
 all workflows
   -> return Project and task IDs immediately when wait=false
   -> otherwise call wait_task(task_id)
-  -> on terminal state, read or copy a matching Lean file from the archive
+  -> for complete, complete_with_errors, or out_of_budget, read or copy an exact matching Lean file from the archive when present
 ```
 
 For `wait=false`, no workflow reserves or writes a local Lean output. The caller retains the
-returned IDs and can inspect native state later. For `wait=true`, a nonterminal wait outcome
-returns the current native task status with the wait message and no invented code or output
-path.
+returned IDs and can inspect native state later. For `wait=true`, `failed`, `canceled`, and
+nonterminal outcomes return no artifact. Even an artifact-producing status can have no exact
+matching file, so the workflow reports that condition without inventing code or an output path.
 
 ## File Safety
 
