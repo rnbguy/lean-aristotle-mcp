@@ -139,7 +139,7 @@ def _read_lean_from_solution_archive(
         lean_path = _find_lean_file(extract_dir, preferred_filename)
         if lean_path is None:
             return None
-        with open(lean_path) as file:
+        with open(lean_path, encoding="utf-8") as file:
             return file.read()
     finally:
         shutil.rmtree(extract_dir)

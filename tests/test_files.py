@@ -5,6 +5,7 @@ import tarfile
 
 import pytest
 
+from aristotle_mcp import files
 from aristotle_mcp.files import (
     _canonicalize_path,
     _copy_lean_from_solution_archive,
@@ -62,6 +63,21 @@ def test_archive_selection_and_atomic_copy(tmp_path):
     _extract_solution_archive(str(duplicate), str(duplicate_dir))
     selected = _find_lean_file(str(duplicate_dir), "shared.lean")
     assert selected is None
+
+
+def test_read_solution_archive_decodes_lean_as_utf8(tmp_path, monkeypatch):
+    archive = tmp_path / "utf8.tar.gz"
+    content = "-- caf\u00e9\n".encode("utf-8")
+    make_archive(archive, [("solution.lean", content)])
+    real_open = open
+
+    def checked_open(path, *args, **kwargs):
+        assert kwargs["encoding"] == "utf-8"
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(files, "open", checked_open, raising=False)
+
+    assert files._read_lean_from_solution_archive(str(archive)) == "-- caf\u00e9\n"
 
 
 def test_archive_selection_matches_exact_directory_preferred_path(tmp_path):
