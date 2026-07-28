@@ -1,74 +1,77 @@
 # Aristotle MCP Server
 
-> **Note:** This project was 100% vibe-coded with [Claude Code](https://claude.ai/code).
+An MCP (Model Context Protocol) server for [Aristotle](https://aristotle.harmonic.fun/), Harmonic's Lean 4 theorem proving service. It exposes the native `aristotlelib>=2.1.0` Project, AgentTask, and Event API through a small, explicit MCP surface.
 
-An MCP (Model Context Protocol) server that wraps [Aristotle](https://aristotle.harmonic.fun/), Harmonic's automated theorem prover for Lean 4. This enables AI assistants to strategically invoke theorem proving during Lean development—filling in `sorry` statements, verifying lemmas, or formalizing natural language into Lean code.
+Use it when an assistant needs to submit Lean work, follow its progress, answer a question from the Aristotle agent, retrieve project files, fill `sorry` statements, or turn a mathematical description into Lean.
 
-## What is Aristotle?
+## What Changed In The Native 2.1 API
 
-[Aristotle](https://aristotle.harmonic.fun/) is a cloud-based theorem proving service by [Harmonic](https://harmonic.fun/) that can automatically fill in proofs in Lean 4. Given Lean code with `sorry` placeholders, Aristotle attempts to find valid proofs using advanced search techniques.
+This server has exactly 16 tools. It no longer exposes legacy project-job tools such as `check_proof`, `check_prove_file`, `check_formalize`, `cancel_project`, `get_solution`, `get_solution_if_complete`, or `get_input`.
 
-To use this MCP server, you'll need an API key from [aristotle.harmonic.fun](https://aristotle.harmonic.fun/).
+The native model has three separate identifiers:
+
+- A **Project** has a `project_id`. It owns the submitted prompt and files. Native project statuses are `idle` and `running`.
+- An **AgentTask** has a `task_id` and belongs to a project. It represents one unit of agent work. Its native status is returned directly, for example `queued`, `in_progress`, `complete`, `complete_with_errors`, `out_of_budget`, `failed`, or `canceled`.
+- An **Event** has an `event_id` and belongs to a task. Events describe messages, progress, files, and agent questions.
+
+Keep all IDs returned by a submission. A workflow result contains both `project_id` and `task_id`; an agent question is identified by `event_id`.
 
 ## Tools Provided
 
 | Tool | Description |
 |------|-------------|
-| `prove` | Fill in `sorry` statements in Lean code snippets |
-| `prove_file` | Prove all sorries in a Lean file with automatic import resolution |
-| `formalize` | Convert natural language math to Lean 4 code |
-| `check_proof` | Poll async proof jobs for completion |
-| `check_prove_file` | Poll async file proof jobs for completion |
-| `check_formalize` | Poll async formalization jobs for completion |
-| `get_project` | Inspect a known Aristotle project by project ID |
-| `cancel_project` | Cancel a queued or in-progress Aristotle project |
-| `get_solution` | Download a completed project's solution archive |
-| `get_solution_if_complete` | Download a solution archive only when output is available |
-| `get_input` | Download the original input archive for a project |
+| `submit_project` | Create a Project from a directory or tar archive and return the initial task. |
+| `list_projects` | List native Projects in newest-first order, with optional native status filters. |
+| `get_project` | Refresh and inspect one Project. |
+| `continue_project` | Send an `INSTRUCT` follow-up to a Project, optionally uploading files. |
+| `ask_project` | Send an `ASK` follow-up that may cause the agent to request an answer. |
+| `list_project_tasks` | List the AgentTasks for a Project. |
+| `get_task` | Refresh and inspect one AgentTask. |
+| `wait_task` | Poll a task with a finite deadline and stop for completion, timeout, or an agent question. |
+| `cancel_task` | Cancel a nonterminal AgentTask. |
+| `list_task_events` | List the Events emitted by a task. |
+| `get_event` | Refresh and inspect one Event. |
+| `answer_question` | Answer a pending `sent` `agent_question` Event. |
+| `download_project_files` | Atomically download the native project archive. |
+| `prove` | Submit an inline Lean proof request, with optional context files and hint. |
+| `prove_file` | Submit the nearest Lake project for one Lean file and optionally write its solved file. |
+| `formalize` | Submit a natural-language formalization request, optionally with one Lean context file. |
+
+Detailed result schemas and design rationale are in [docs/ARISTOTLE_MCP_DESIGN.md](docs/ARISTOTLE_MCP_DESIGN.md). Worked assistant flows are in [docs/USER_STORIES.md](docs/USER_STORIES.md).
 
 ## Installation
 
 ### Prerequisites
 
-Install [uv](https://docs.astral.sh/uv/) (the fast Python package manager):
+Install [uv](https://docs.astral.sh/uv/), then obtain an API key from [aristotle.harmonic.fun](https://aristotle.harmonic.fun/).
 
 ```bash
 # macOS
 brew install uv
 
-# Or via shell script (macOS/Linux)
+# macOS or Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
-### Get Your API Key
-
-1. Sign up at [aristotle.harmonic.fun](https://aristotle.harmonic.fun/)
-2. Copy your API key
-3. Add it to your shell configuration (`~/.zshrc` or `~/.bashrc`):
-
-```bash
 export ARISTOTLE_API_KEY="your-api-key-here"
 ```
 
-Then restart your terminal or run `source ~/.zshrc`.
+The server depends on `aristotlelib>=2.1.0`, so both real and mock installations use the same public model surface.
 
-## Adding to Claude Code
+### Add To Claude Code
 
-### Option 1: Command Line (Recommended)
+Register directly from the repository:
 
 ```bash
 claude mcp add aristotle -e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
 ```
 
-This registers the server with your API key from the environment. Use `--scope user` to make it available across all projects:
+Add `--scope user` to make it available to every local project:
 
 ```bash
 claude mcp add aristotle --scope user -e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
 ```
 
-### Option 2: JSON Configuration
-
-Add to your `~/.claude.json`:
+Or add an MCP entry to `~/.claude.json`:
 
 ```json
 {
@@ -85,20 +88,11 @@ Add to your `~/.claude.json`:
 }
 ```
 
-The `${ARISTOTLE_API_KEY}` syntax expands to your shell environment variable.
+Verify the registration with `claude mcp list` or `claude mcp get aristotle`. In Claude Code, `/mcp` also shows the connection state.
 
-### Verify Installation
+### Add To Claude Desktop
 
-```bash
-claude mcp list              # Check server is registered
-claude mcp get aristotle     # Test the connection
-```
-
-Or inside Claude Code, run `/mcp` to see connection status.
-
-## Adding to Claude Desktop
-
-Add to your `claude_desktop_config.json`:
+Add the server to `claude_desktop_config.json`:
 
 ```json
 {
@@ -114,135 +108,176 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-**Note:** Claude Desktop doesn't expand environment variables, so you must include your actual API key.
+Claude Desktop does not expand shell variables in this configuration, so provide the key through its supported environment configuration.
 
-## Mock Mode (Testing Without API Key)
+## Mock Mode
 
-To test the MCP server without making real API calls:
+Set `ARISTOTLE_MOCK=true` to use the offline, in-memory implementation:
 
 ```bash
 claude mcp add aristotle-mock -e ARISTOTLE_MOCK=true -- uvx --from git+https://github.com/septract/lean-aristotle-mcp aristotle-mcp
 ```
 
-Or set in your configuration:
+Mock mode registers the same 16 tools and returns the same result shapes without an API key or network request. It stores Projects, AgentTasks, and Events only for the process lifetime. Mock project directories follow the SDK-style ignore and `.gitignore` behavior, so local test submissions behave like real directory collection. It is useful for tool integration, local development, and tests, not for validating a proof against the live service.
 
-```json
-{
-  "env": {
-    "ARISTOTLE_MOCK": "true"
-  }
-}
+## Using The Native Lifecycle
+
+### Submit And Track A Project
+
+Submit a directory or one tar archive, then retain the returned Project and task objects:
+
+```text
+submit_project(
+  prompt="Prove all sorry statements in this Lean project.",
+  project_dir="tests/lean_project"
+)
+-> {
+     "project": {"project_id": "project-...", "status": "running", ...},
+     "task": {"task_id": "task-...", "project_id": "project-...", "status": "queued", ...}
+   }
 ```
 
-## Usage Notes
+`project_dir` and `tar_file_path` are alternatives, not a pair. `public_file_path` and `agent_questions_setting` are passed to the native SDK. List operations accept a pagination key returned by the preceding page.
 
-- **Proofs take time:** Aristotle proofs can take anywhere from a few minutes to several hours depending on complexity. Simple proofs may complete in 1-5 minutes, but complex proofs can take significantly longer. The tools support async mode (`wait=False`) for non-blocking operation—this is strongly recommended for anything non-trivial.
-- **Lean 4 only:** Aristotle works with Lean 4, not Lean 3 or earlier versions.
-- **Mathlib support:** File-based proving automatically resolves Lake dependencies including Mathlib.
+Use `get_task` for one refresh, or `wait_task` when a bounded wait is appropriate:
 
-## Async Workflow
-
-All proving tools support synchronous (`wait=True`, default) and asynchronous (`wait=False`) modes.
-
-### Synchronous Mode (Simple)
-```
-prove(code, wait=True)        → Returns filled proof when complete
-prove_file(file, wait=True)   → Writes solution file when complete
-formalize(desc, wait=True)    → Returns Lean code when complete
+```text
+wait_task(task_id="task-...", timeout_seconds=300, poll_interval_seconds=5)
+-> {"outcome": "terminal", "task": {"status": "complete", ...}, "question": null, ...}
 ```
 
-### Asynchronous Mode (Non-blocking)
+`wait_task` never calls `AgentTask.wait_for_completion` or `input()`. Its finite deadline covers initial lookup, refreshes, event paging, and polling. A successful wait has outcome `terminal`, `timed_out`, or `waiting_for_answer`; if lookup expires before a task snapshot exists, it returns a structured API error because no `TaskResult` can be returned.
 
-Use async mode for long-running proofs to avoid blocking:
+### Answer Agent Questions
 
-```
-1. Submit:    prove_file(file, wait=False)     → Returns project_id
-2. Poll:      check_prove_file(project_id)     → Returns status (save=False by default)
-3. Save:      check_prove_file(project_id, output_path="out.lean", save=True)
-```
+An `ASK` follow-up asks the agent a question about a Project. An `INSTRUCT` follow-up continues work with instructions and may upload files. Use `continue_project` for `INSTRUCT`; uploaded files are accepted only while the native Project is `idle`.
 
-**Key points:**
-- `check_prove_file` defaults to `save=False` — it only checks status without writing files
-- To save the result, call with `save=True`
-- If `output_path` is omitted, uses the path from the original `prove_file` call (stored for 30 days)
-- You can override `output_path` to save to a different location
-- `check_proof` and `check_formalize` return the code directly in the response (no `save` parameter needed)
+```text
+ask_project(project_id="project-...", prompt="Which theorem should I prove next?")
+-> {"task_id": "task-...", "status": "queued", ...}
 
-## Project Lifecycle Tools
+wait_task(task_id="task-...", timeout_seconds=60)
+-> {
+     "outcome": "waiting_for_answer",
+     "question": {"event_id": "event-...", "event_type": "agent_question", "status": "sent", ...}
+   }
 
-The MCP exposes project-scoped lifecycle operations for project IDs you already know, such as IDs returned by `prove`, `prove_file`, `formalize`, or the Aristotle CLI.
-
-```
-get_project(project_id)                  → Inspect status and metadata
-cancel_project(project_id)               → Cancel queued/in-progress work
-get_solution(project_id, output_path)    → Save solution .tar.gz when complete
-get_solution_if_complete(project_id)     → Poll-friendly solution download
-get_input(project_id, output_path)       → Save original input .tar.gz
+answer_question(event_id="event-...", answer="Prove the induction lemma first.")
 ```
 
-`list_projects` is intentionally not exposed. Aristotle projects are account-level rather than local workspace-level, so listing them could reveal unrelated projects outside the current sandboxed context.
+`answer_question` accepts only a pending `sent` agent-question event. Use `list_task_events` or `get_event` when the question needs more context. Events include content plus optional file path, explanation, suggestions, and duration.
 
-Download tools do not overwrite existing files by default. Pass `overwrite=True` only when replacing an existing archive is intended.
+### Retrieve Files Safely
 
-## Context Files
+`download_project_files` saves the native project archive, typically to a `.tar.gz` destination. It reserves the destination first and writes through a temporary path. Existing paths are never replaced unless `overwrite=true` is explicit.
 
-- **`prove`** accepts `context_files` (a list) — multiple Lean files can provide imports
-- **`formalize`** accepts `context_file` (singular) — only one context file supported
+The Lean workflows apply the same care when reading solution archives. They reject archive members that escape the destination and reject links before extracting a matching Lean file.
 
-This difference reflects the underlying [aristotlelib](https://pypi.org/project/aristotlelib/) API.
+## Lean Workflows
+
+The three workflow tools create native Projects and return `project_id` plus `task_id`, even when `wait=false`.
+
+### Prove An Inline Snippet
+
+`prove(code, context_files=None, hint=None, wait=True)` stages `proof.lean` with the supplied code. It can stage several context files, and the optional hint is written into the staged proof request.
+
+```text
+prove(
+  code="theorem add_zero (n : Nat) : n + 0 = n := by sorry",
+  hint="Use Nat.add_zero",
+  wait=false
+)
+-> {"project_id": "project-...", "task_id": "task-...", "status": "queued", ...}
+```
+
+With `wait=true`, the workflow waits through `wait_task` and returns the contents of `proof.lean` when the completed Project has a matching downloadable file. A terminal task can still have no downloadable Lean output, and that case is reported in `message` rather than invented as a proof result.
+
+### Prove A File In Its Lake Project
+
+`prove_file(file_path, output_path=None, wait=True)` locates the nearest ancestor with `lakefile.lean`, `lakefile.toml`, or `lean-toolchain`. That nearest Lake root, rather than the whole workspace, becomes the submitted project directory.
+
+```text
+prove_file("tests/lean_project/TestProject/Basic.lean")
+-> {
+     "project_id": "project-...",
+     "task_id": "task-...",
+     "status": "complete",
+     "output_path": ".../Basic_aristotle.lean",
+     ...
+   }
+```
+
+When waiting, the default output filename is the input basename with `_aristotle.lean` inserted before the extension. The workflow extracts only the matching original basename from the result archive and writes it atomically. With `wait=false`, no output path is reserved or written; retain both IDs and later use `wait_task`, task events, and project downloads.
+
+### Formalize Natural Language
+
+`formalize(description, prove=False, context_file=None, wait=True)` stages the description as `description.txt` and asks Aristotle to save its Lean result as `formalize.lean`.
+
+```text
+formalize(
+  description="The sum of two even natural numbers is even.",
+  prove=true,
+  context_file="src/Definitions.lean",
+  wait=false
+)
+```
+
+`context_file` is singular. This is the exact server signature and differs deliberately from `prove`, which accepts the plural `context_files`. With `wait=true`, the result returns matching `formalize.lean` contents when available.
 
 ## Local Development
 
-Clone the repository and install in editable mode:
+Clone the repository, then install the full development environment:
 
 ```bash
 git clone https://github.com/septract/lean-aristotle-mcp.git
 cd lean-aristotle-mcp
+uv sync --all-extras
+```
+
+The Makefile also supports the existing virtual environment flow:
+
+```bash
 make venv
-source .venv/bin/activate
-make install-dev  # Includes dev dependencies
+make install-dev
+make run
+make run-mock
 ```
 
-Run the development server:
+Common checks are:
 
 ```bash
-make run          # Uses real API
-make run-mock     # Uses mock responses
+make check       # Ruff and mypy
+make test        # Offline mock suite
+make test-lean   # Fetch Lean cache, then build the test Lake project
+make verify      # Offline checks, tests, and Lean build
+make build       # Build the wheel
 ```
 
-The project uses a Makefile for common tasks. Run `make help` for all options.
-
-```bash
-make check      # Run lint + type-check
-make test       # Run mock tests (no API key needed)
-make test-api   # Run live API tests (requires ARISTOTLE_API_KEY)
-make verify     # Full verification suite
-```
+`make test-api` is deliberately separate. It requires `ARISTOTLE_API_KEY`, uses a 60-second test timeout, and creates test-owned live Projects. It is an opt-in, paid integration check, not part of `make test`, `make test-all`, or `make verify`.
 
 ## Troubleshooting
 
-### "spawn uvx ENOENT" error
+### `spawn uvx ENOENT`
 
-This means `uv` isn't in Claude's PATH. On macOS, GUI applications don't always inherit your shell PATH. Solutions:
+The MCP host cannot find `uvx`. Restart the host after installing uv, check `which uvx` in a terminal, or configure the full path to `uvx` when a GUI application has a different `PATH`.
 
-1. **Restart Claude** after installing uv
-2. **Use full path:** Replace `uvx` with the full path (e.g., `/opt/homebrew/bin/uvx`)
-3. **Check installation:** Run `which uvx` in terminal to verify uv is installed
+### `ARISTOTLE_API_KEY not set`
 
-### "ARISTOTLE_API_KEY not set" error
+Export the key in the environment that launches the MCP host, not only in an unrelated shell. Check the configured MCP entry, restart the host after changing its environment, or use `ARISTOTLE_MOCK=true` for offline work.
 
-Make sure you've:
-1. Added `export ARISTOTLE_API_KEY="..."` to your shell config
-2. Restarted your terminal
-3. Included `-e ARISTOTLE_API_KEY=$ARISTOTLE_API_KEY` when adding the server
+### A Task Did Not Finish
 
-## License
+Do not use a removed `check_*` tool. Call `get_task` for one state refresh or `wait_task` with explicit finite timeout and polling values. If its outcome is `waiting_for_answer`, inspect the returned Event and call `answer_question` before waiting again.
 
-MIT - see [LICENSE](LICENSE) for details.
+### A Workflow Did Not Return Lean Code
 
-## Links
+The native task may reach a terminal status without a downloadable matching Lean file. Read `status`, `output_summary`, and `message`; inspect task events; then use `download_project_files` if the whole project archive is needed. `prove_file` writes only the matching requested Lean basename when it is present.
 
-- [Aristotle API](https://aristotle.harmonic.fun/) - Get your API key
-- [Harmonic](https://harmonic.fun/) - Company behind Aristotle
-- [aristotlelib on PyPI](https://pypi.org/project/aristotlelib/) - Python client library
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
+## License And Links
+
+MIT, see [LICENSE](LICENSE).
+
+- [Aristotle API](https://aristotle.harmonic.fun/)
+- [Harmonic](https://harmonic.fun/)
+- [aristotlelib on PyPI](https://pypi.org/project/aristotlelib/)
+- [Model Context Protocol](https://modelcontextprotocol.io/)
