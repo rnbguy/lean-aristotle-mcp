@@ -136,11 +136,11 @@ async def continue_project(
     files: list[str] | None = None,
     agent_questions_setting: AgentQuestionsSetting = AgentQuestionsSetting.DISABLED,
 ) -> TaskResult | ErrorResult:
-    if is_mock_mode():
-        from aristotle_mcp.mock_projects import continue_project as continue_mock_project
-
-        return await continue_mock_project(project_id, prompt, files, agent_questions_setting)
     try:
+        if is_mock_mode():
+            from aristotle_mcp.mock_projects import continue_project as continue_mock_project
+
+            return await continue_mock_project(project_id, prompt, files, agent_questions_setting)
         project = await Project.from_id(project_id)
         uploaded_files: list[Path | str] = []
         if files is not None:

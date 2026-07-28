@@ -168,6 +168,54 @@ async def test_mock_continue_rejects_mixed_files_without_mutating_state(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_mock_continue_translates_read_oserror_without_mutating_state(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    submission = await submit_project("initial")
+    first_file = tmp_path / "First.lean"
+    second_file = tmp_path / "Second.lean"
+    first_file.write_text("theorem first : True := by trivial\n")
+    second_file.write_text("theorem second : True := by trivial\n")
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    canceled = await cancel_task(task.task_id)
+    project_state = state.projects[project.project_id]
+    source_files = project_state.source_files.copy()
+    has_files = project_state.has_files
+    status = project_state.status
+    last_updated = project_state.last_updated
+    task_ids = project_state.task_ids.copy()
+    tasks = state.tasks.copy()
+    events = state.events.copy()
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path == second_file:
+            raise OSError("read failed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    result = await continue_project(
+        project.project_id,
+        "continue",
+        [str(first_file), str(second_file)],
+    )
+
+    assert not isinstance(canceled, ErrorResult)
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "filesystem"
+    assert project_state.source_files == source_files
+    assert project_state.has_files == has_files
+    assert project_state.status == status
+    assert project_state.last_updated == last_updated
+    assert project_state.task_ids == task_ids
+    assert state.tasks == tasks
+    assert state.events == events
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("overwrite", [False, True])
 async def test_mock_download_replaces_destination_from_sibling_temporary_file(
     tmp_path, monkeypatch: pytest.MonkeyPatch, overwrite: bool
