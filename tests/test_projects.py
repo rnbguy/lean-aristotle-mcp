@@ -7,6 +7,7 @@ import pytest
 from aristotlelib import ProjectStatus
 from aristotlelib.local_file_utils import LeanProjectError
 
+from aristotle_mcp import files as file_utils
 from aristotle_mcp import projects
 from aristotle_mcp.models import ErrorResult
 
@@ -63,6 +64,37 @@ async def test_download_translates_existing_destination_to_error(
     assert isinstance(result, ErrorResult)
     assert result.error_type == "filesystem"
     assert output.read_text() == "keep"
+
+
+@pytest.mark.asyncio
+async def test_download_translates_unique_path_exhaustion_without_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "project-1.tar.gz").touch()
+    (tmp_path / "project-1.tar.1.gz").touch()
+    looked_up = False
+    real_find_unique_path = file_utils._find_unique_path
+
+    async def from_id(_project_id: str) -> SimpleNamespace:
+        nonlocal looked_up
+        looked_up = True
+        return _project()
+
+    monkeypatch.setattr(projects.Project, "from_id", from_id)
+    monkeypatch.setattr(
+        file_utils,
+        "_find_unique_path",
+        lambda path: real_find_unique_path(path, max_attempts=2),
+    )
+
+    result = await projects.download_project_files("project-1")
+
+    assert isinstance(result, ErrorResult)
+    assert result.error_type == "filesystem"
+    assert not looked_up
+    assert not (tmp_path / "project-1.tar.2.gz").exists()
 
 
 @pytest.mark.asyncio

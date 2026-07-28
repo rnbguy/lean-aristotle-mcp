@@ -15,18 +15,16 @@ class _UnsafeArchiveMemberError(tarfile.TarError, ValueError):
 
 
 def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
-    candidates = [path] + [
-        f"{os.path.splitext(path)[0]}.{i}{os.path.splitext(path)[1]}"
-        for i in range(1, max_attempts + 1)
-    ]
-    for candidate in candidates:
+    stem, suffix = os.path.splitext(path)
+    for attempt in range(max_attempts):
+        candidate = path if attempt == 0 else f"{stem}.{attempt}{suffix}"
         try:
             fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             _close_reserved_descriptor(fd, candidate)
             return candidate
         except FileExistsError:
             continue
-    raise RuntimeError(f"Could not find unique path after {max_attempts} attempts: {path}")
+    raise FileExistsError(f"Could not find unique path after {max_attempts} attempts: {path}")
 
 
 def _close_reserved_descriptor(fd: int, path: str) -> None:

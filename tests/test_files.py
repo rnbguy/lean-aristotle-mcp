@@ -69,6 +69,20 @@ def test_find_unique_path_removes_placeholder_when_close_fails(tmp_path, monkeyp
     assert not path.exists()
 
 
+def test_find_unique_path_honors_max_attempts(tmp_path):
+    path = tmp_path / "reserved"
+    path.touch()
+    (tmp_path / "reserved.1").touch()
+
+    with pytest.raises(
+        FileExistsError,
+        match=f"Could not find unique path after 2 attempts: {path}",
+    ):
+        _find_unique_path(str(path), max_attempts=2)
+
+    assert not (tmp_path / "reserved.2").exists()
+
+
 def test_reserve_download_path_removes_placeholder_when_close_fails(tmp_path, monkeypatch):
     path = tmp_path / "reserved"
     original_close = os.close
