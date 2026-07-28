@@ -17,6 +17,7 @@ from aristotle_mcp.files import (
     _copy_lean_from_solution_archive,
     _lake_root,
     _read_lean_from_solution_archive,
+    _remove_reserved_path,
     _reserve_output_path,
     _stage_context_files,
 )
@@ -27,6 +28,9 @@ from aristotle_mcp.tasks import wait_task
 _MAX_CODE_SIZE: Final = 1_000_000
 _MAX_DESCRIPTION_SIZE: Final = 100_000
 _MAX_FILE_SIZE: Final = 10_000_000
+_OUTPUT_STATUSES: Final = frozenset(
+    {"complete", "complete_with_errors", "out_of_budget"}
+)
 
 
 def _submitted(project_id: str, task: TaskResult) -> WorkflowResult:
@@ -109,6 +113,8 @@ async def _submit_and_wait(
             return waited
         if waited.outcome != "terminal":
             return _after_wait(waited)
+        if waited.task.status not in _OUTPUT_STATUSES:
+            return _after_wait(waited)
         if reserved_output is not None:
             copied = await _copy_code(project.project_id, reserved_output, preferred_filename)
             if copied is not None:
@@ -137,8 +143,8 @@ async def _submit_and_wait(
     except (AristotleAPIError, LeanProjectError, OSError, tarfile.TarError, ValueError) as error:
         return error_result(error)
     finally:
-        if reserved_output is not None and os.path.exists(reserved_output):
-            os.unlink(reserved_output)
+        if reserved_output is not None:
+            _remove_reserved_path(reserved_output, True)
 
 
 async def prove(

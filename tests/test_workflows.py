@@ -6,7 +6,13 @@ import pytest
 
 from aristotle_mcp import mock_tasks, mock_workflows, workflows
 from aristotle_mcp.mock_state import reset_state, state
-from aristotle_mcp.models import ErrorResult, EventResult, WaitTaskResult
+from aristotle_mcp.models import (
+    ErrorResult,
+    EventResult,
+    ProjectResult,
+    TaskResult,
+    WaitTaskResult,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -306,6 +312,244 @@ async def test_mock_submit_does_not_write_output_while_waiting_for_answer(
     assert result.code is None
     assert result.output_path is None
     assert result.message == "Task is waiting for an answer."
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "canceled"])
+async def test_production_submit_does_not_write_failed_or_canceled_output(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    submitted_task = TaskResult("project", "task", "queued", "now", "now", None, None, None, None)
+    terminal_task = TaskResult("project", "task", status, "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, submitted_task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        return WaitTaskResult("terminal", terminal_task, None, "Task reached a terminal status.")
+
+    async def copy_code(
+        _project_id: str, _output_path: str, _preferred_filename: str | None
+    ) -> str | None:
+        pytest.fail("failed and canceled tasks must not download artifacts")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    monkeypatch.setattr(workflows, "wait_task", wait)
+    monkeypatch.setattr(workflows, "_copy_code", copy_code)
+    result = await workflows._submit_and_wait(str(tmp_path), "prompt", True, str(output))
+
+    assert not isinstance(result, ErrorResult)
+    assert result.status == status
+    assert result.code is None
+    assert result.output_path is None
+    assert result.message == "Task reached a terminal status."
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "canceled"])
+async def test_mock_submit_does_not_write_failed_or_canceled_output(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    submitted_task = TaskResult("project", "task", "queued", "now", "now", None, None, None, None)
+    terminal_task = TaskResult("project", "task", status, "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, submitted_task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        return WaitTaskResult("terminal", terminal_task, None, "Task reached a terminal status.")
+
+    monkeypatch.setattr(mock_workflows, "submit_project", submit)
+    monkeypatch.setattr(mock_workflows, "wait_task", wait)
+    result = await mock_workflows._submit(str(tmp_path), "prompt", True, "code", str(output))
+
+    assert not isinstance(result, ErrorResult)
+    assert result.status == status
+    assert result.code is None
+    assert result.output_path is None
+    assert result.message == "Task reached a terminal status."
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["complete", "complete_with_errors", "out_of_budget"])
+async def test_production_submit_preserves_zero_byte_successful_output(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", status, "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        return WaitTaskResult("terminal", task, None, "Task reached a terminal status.")
+
+    async def copy_code(
+        _project_id: str, _output_path: str, _preferred_filename: str | None
+    ) -> str | None:
+        return str(output)
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    monkeypatch.setattr(workflows, "wait_task", wait)
+    monkeypatch.setattr(workflows, "_copy_code", copy_code)
+    result = await workflows._submit_and_wait(str(tmp_path), "prompt", True, str(output))
+
+    assert not isinstance(result, ErrorResult)
+    assert result.status == status
+    assert result.output_path == str(output)
+    assert output.exists()
+    assert output.stat().st_size == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["complete", "complete_with_errors", "out_of_budget"])
+async def test_mock_submit_preserves_zero_byte_successful_output(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", status, "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        return WaitTaskResult("terminal", task, None, "Task reached a terminal status.")
+
+    monkeypatch.setattr(mock_workflows, "submit_project", submit)
+    monkeypatch.setattr(mock_workflows, "wait_task", wait)
+    result = await mock_workflows._submit(str(tmp_path), "prompt", True, "", str(output))
+
+    assert not isinstance(result, ErrorResult)
+    assert result.status == status
+    assert result.output_path == str(output)
+    assert output.exists()
+    assert output.stat().st_size == 0
+
+
+@pytest.mark.asyncio
+async def test_production_submit_cleans_reservation_after_unexpected_copy_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", "complete", "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        return WaitTaskResult("terminal", task, None, "Task reached a terminal status.")
+
+    async def copy_code(
+        _project_id: str, _output_path: str, _preferred_filename: str | None
+    ) -> str | None:
+        raise RuntimeError("copy failed")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    monkeypatch.setattr(workflows, "wait_task", wait)
+    monkeypatch.setattr(workflows, "_copy_code", copy_code)
+
+    with pytest.raises(RuntimeError, match="copy failed"):
+        await workflows._submit_and_wait(str(tmp_path), "prompt", True, str(output))
+
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_production_submit_cleans_reservation_after_unexpected_wait_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", "queued", "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        raise RuntimeError("wait failed")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    monkeypatch.setattr(workflows, "wait_task", wait)
+
+    with pytest.raises(RuntimeError, match="wait failed"):
+        await workflows._submit_and_wait(str(tmp_path), "prompt", True, str(output))
+
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_submit_cleans_reservation_after_unexpected_wait_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", "queued", "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        raise RuntimeError("wait failed")
+
+    monkeypatch.setattr(mock_workflows, "submit_project", submit)
+    monkeypatch.setattr(mock_workflows, "wait_task", wait)
+
+    with pytest.raises(RuntimeError, match="wait failed"):
+        await mock_workflows._submit(str(tmp_path), "prompt", True, "code", str(output))
+
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_submit_cleans_partial_output_after_write_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output.lean"
+    project = ProjectResult("project", "running", "now", "now", None, True, True)
+    task = TaskResult("project", "task", "queued", "now", "now", None, None, None, None)
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return project, task
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        terminal_task = TaskResult(
+            "project", "task", "complete", "now", "now", None, None, None, None
+        )
+        return WaitTaskResult("terminal", terminal_task, None, "Task reached a terminal status.")
+
+    def partial_write(self, _data: str, **_kwargs: str | None) -> int:
+        self.write_bytes(b"partial")
+        raise OSError("write failed")
+
+    monkeypatch.setattr(mock_workflows, "submit_project", submit)
+    monkeypatch.setattr(mock_workflows, "wait_task", wait)
+    monkeypatch.setattr("pathlib.Path.write_text", partial_write)
+
+    result = await mock_workflows._submit(str(tmp_path), "prompt", True, "code", str(output))
+
+    assert result == ErrorResult("error", "filesystem", "write failed")
     assert not output.exists()
 
 
