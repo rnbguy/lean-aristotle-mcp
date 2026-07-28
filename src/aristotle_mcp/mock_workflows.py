@@ -9,6 +9,7 @@ from typing import Final
 
 from aristotle_mcp.errors import error_result
 from aristotle_mcp.files import (
+    _best_effort_remove,
     _canonicalize_path,
     _lake_root,
     _reserve_output_path,
@@ -91,7 +92,7 @@ async def _submit(
         )
     finally:
         if reserved is not None:
-            Path(reserved).unlink(missing_ok=True)
+            _best_effort_remove(reserved)
 
 
 async def prove(

@@ -606,6 +606,24 @@ async def test_mock_submit_cleans_reservation_after_unexpected_wait_failure(
 
 
 @pytest.mark.asyncio
+async def test_mock_submit_returns_outcome_when_reservation_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_state()
+    output = tmp_path / "output.lean"
+
+    def fail_unlink(_path: str) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(mock_workflows.os, "unlink", fail_unlink)
+    result = await mock_workflows._submit(str(tmp_path), "prompt", False, "code", str(output))
+
+    assert not isinstance(result, ErrorResult)
+    assert result.status == "queued"
+    assert result.output_path is None
+
+
+@pytest.mark.asyncio
 async def test_mock_submit_cleans_partial_output_after_write_failure(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
