@@ -1,203 +1,261 @@
 # AI User Stories for Aristotle MCP
 
-This document describes the key workflows an AI assistant would use when invoking Aristotle during Lean 4 development.
+This document describes the main workflows an MCP client uses with the finalized native `aristotlelib>=2.1.0` surface. Each flow keeps the Project, task, and Event IDs that it receives. There are no legacy `check_*` tools or project-job IDs.
 
-## Story 1: Stuck on a Proof Step
+## Story 1: Stuck On A Proof Step
 
-**Scenario:** The AI is helping a user write Lean code and gets stuck on a specific proof step (e.g., arithmetic, termination argument).
-
-**Flow:**
-```
-AI: "I can structure this proof but the nat arithmetic is tricky. Let me ask Aristotle."
-→ prove(code="theorem foo : n + 0 = n := by sorry")
-→ {"status": "proved", "code": "theorem foo : n + 0 = n := by simp"}
-AI: "Aristotle filled it in using simp."
-```
-
-**Tool:** `prove(code, hint)` with `wait=True` (default)
-
-**When to use:** The AI has written the proof structure but cannot discharge a specific obligation.
-
----
-
-## Story 2: Lake Project with Multiple Files
-
-**Scenario:** User has a Lean project with `lakefile.lean`, Mathlib dependencies, and custom definitions across multiple files. They want to prove theorems in a specific file.
-
-**Flow (sync):**
-```
-AI: "Let me prove all the sorries in your theorem file."
-→ prove_file(file_path="src/MyTheorem.lean")
-→ Aristotle auto-imports all Lake dependencies and project files
-→ {"status": "proved", "sorries_filled": 3, "sorries_total": 3, "output_path": "src/MyTheorem_aristotle.lean"}
-```
-
-**Flow (async for large files):**
-```
-AI: "This file has many theorems. I'll submit it and check back."
-→ prove_file(file_path="src/BigFile.lean", wait=False)
-→ {"status": "submitted", "project_id": "xyz-789", "sorries_total": 15}
-
-AI: [polls later]
-→ check_prove_file(project_id="xyz-789")
-→ {"status": "in_progress", "percent_complete": 60}
-
-AI: [polls again]
-→ check_prove_file(project_id="xyz-789")
-→ {"status": "proved", "percent_complete": 100, "message": "Proof complete. Call again with save=True to write the solution."}
-
-AI: [saves the solution]
-→ check_prove_file(project_id="xyz-789", save=True)
-→ {"status": "proved", "percent_complete": 100, "output_path": "src/BigFile_aristotle.lean"}
-```
-
-**Tools:** `prove_file(file_path)` with optional `wait=False`, `check_prove_file(project_id)` for polling
-
-**When to use:** Working within an existing Lake project where imports and dependencies matter.
-
----
-
-## Story 3: Long-Running Proof (Async)
-
-**Scenario:** The AI submits a complex proof that may take several minutes. Rather than blocking, it submits asynchronously and polls for completion.
+**Scenario:** An assistant can write the theorem statement but needs help with the proof.
 
 **Flow:**
+
+```text
+AI: "The statement is clear, but I need a proof for the arithmetic step."
+
+prove(
+  code="theorem add_zero (n : Nat) : n + 0 = n := by sorry",
+  hint="Use the standard natural-number addition lemma."
+)
+
+-> {
+     "status": "complete",
+     "project_id": "project-123",
+     "task_id": "task-456",
+     "code": "theorem add_zero (n : Nat) : n + 0 = n := by ...",
+     "output_path": null,
+     ...
+   }
 ```
-AI: "This is a hard theorem. I'll submit it and check back."
-→ prove(code="theorem hard : ... := by sorry", wait=False)
-→ {"status": "submitted", "project_id": "abc-123"}
 
-AI: [continues other work, then polls]
-→ check_proof(project_id="abc-123")
-→ {"status": "in_progress", "percent_complete": 45, "project_id": "abc-123"}
-AI: "45% complete..."
+**Tool:** `prove(code, context_files=None, hint=None, wait=True)`.
 
-AI: [waits, polls again]
-→ check_proof(project_id="abc-123")
-→ {"status": "proved", "percent_complete": 100, "code": "theorem hard : ... := by exact ..."}
-```
+**When to use:** A focused snippet has one or more `sorry` statements and does not need the full Lake project. Add `context_files` when local definitions or imports are needed.
 
-**Tools:** `prove(wait=False)` to submit, `check_proof(project_id)` to poll
+## Story 2: A Lake Project With Multiple Files
 
-**When to use:** Complex proofs where blocking would waste time, or when the AI wants to do other work while waiting.
-
----
-
-## Story 4: Verify a Lemma Before Building on It
-
-**Scenario:** The AI is about to write code that depends on a lemma. Before proceeding, it wants to verify the lemma is actually true.
+**Scenario:** A user wants to prove all `sorry` statements in one file under a Lake project with Mathlib and local definitions.
 
 **Flow:**
-```
-AI: "Before I use this lemma, let me verify it's provable."
-→ prove(code="theorem my_lemma : ∀ n : Nat, n < n + 1 := by sorry")
-→ {"status": "proved"}
-AI: "Confirmed. Proceeding with code that depends on my_lemma."
-```
 
-**Or if the lemma is false:**
-```
-→ prove(code="theorem bad_lemma : ∀ n : Nat, n < n := by sorry")
-→ {"status": "counterexample", "counterexample": "n = 0 violates n < n"}
-AI: "This lemma is false! Here's a counterexample: ..."
-```
+```text
+AI: "I will submit the nearest Lean project so the theorem file keeps its project context."
 
-**Tool:** `prove(code)` — returns `counterexample` when statements are false
+prove_file("src/MyProject/Theorems.lean", wait=false)
+-> {
+     "status": "queued",
+     "project_id": "project-123",
+     "task_id": "task-456",
+     "code": null,
+     "output_path": null,
+     "message": "Project submitted."
+   }
 
-**When to use:** Sanity-checking assumptions before building on them, or debugging why a proof won't go through.
+AI: "I can continue with other work while that task runs."
 
----
+wait_task("task-456", timeout_seconds=60, poll_interval_seconds=5)
+-> {
+     "outcome": "timed_out",
+     "task": {"task_id": "task-456", "status": "in_progress", ...},
+     "question": null,
+     ...
+   }
 
-## Story 5: Formalize Natural Language Math
-
-**Scenario:** User describes a mathematical statement in English. The AI needs to convert it to Lean 4 code.
-
-**Flow (basic):**
-```
-User: "Prove that the sum of two even numbers is even"
-AI: "Let me formalize and prove that statement."
-→ formalize(description="The sum of two even numbers is even", prove=True)
-→ {"status": "proved", "lean_code": "theorem even_add_even (a b : Nat) (ha : Even a) (hb : Even b) : Even (a + b) := by ..."}
-AI: "Here's the formalized theorem with proof."
+AI: "It is still running. I retained both IDs and can wait again later."
 ```
 
-**Flow (with project context):**
-```
-User: "Prove that MyCustomType is commutative"
-AI: "I'll use your definitions file as context."
-→ formalize(
-    description="MyCustomType operation is commutative",
-    prove=True,
-    context_file="src/Definitions.lean"
-  )
-→ {"status": "proved", "lean_code": "import Definitions\n\ntheorem mytype_comm ..."}
-AI: "Formalized using your MyCustomType definition."
-```
+**Tools:** `prove_file`, `wait_task`, `get_task`, `list_task_events`, and `download_project_files`.
 
-**Tool:** `formalize(description, prove=True, context_file=...)`
+**When to use:** The input file belongs to a Lake project. `prove_file` searches upward for the nearest `lakefile.lean`, `lakefile.toml`, or `lean-toolchain`, then submits that directory rather than guessing at the workspace root.
 
-**When to use:** Converting informal math to Lean, or verifying natural language claims. Use `context_file` when your description references custom definitions from your project.
+When `wait=true`, `prove_file` writes a matching result to `Theorems_aristotle.lean` by default. It only writes the requested Lean basename when the completed project archive contains it.
 
----
+## Story 3: Bounded Waiting For A Long-Running Task
 
-## Story 6: Standalone Files with Dependencies
-
-**Scenario:** User has loose `.lean` files (not a full Lake project) that depend on each other.
+**Scenario:** The assistant submits a proof that may take longer than a useful interactive turn.
 
 **Flow:**
+
+```text
+prove(code="theorem hard : True := by sorry", wait=false)
+-> {"project_id": "project-123", "task_id": "task-456", "status": "queued", ...}
+
+get_task("task-456")
+-> {"task_id": "task-456", "status": "in_progress", "percent_complete": 45, ...}
+
+wait_task("task-456", timeout_seconds=120, poll_interval_seconds=10)
+-> {"outcome": "terminal", "task": {"status": "complete", ...}, "question": null, ...}
 ```
-AI: "Your theorem uses definitions from other files. Let me include those."
-→ prove(
-    code="theorem uses_my_def : MyDef 5 := by sorry",
-    context_files=["Definitions.lean", "Helpers.lean"]
-  )
-→ {"status": "proved", "code": "..."}
-```
 
-**Tool:** `prove(code, context_files=[...])` — manually specify context
+**Tools:** `prove`, `get_task`, and `wait_task`.
 
-**When to use:** Ad-hoc Lean files without Lake project structure, or when specific context is needed.
+**When to use:** Work is expected to take longer than one request should block. `wait_task` is not a hidden interactive loop. It returns only `terminal`, `timed_out`, or `waiting_for_answer`, with the latest Task state included in every response.
 
----
+If the task reaches a terminal status but a workflow has no matching Lean output, read `output_summary` and task Events. Do not infer a proof result from the task status alone.
 
-## Story 7: Manage a Known Aristotle Project
+## Story 4: An Agent Needs An Answer
 
-**Scenario:** The AI has a `project_id` from an earlier submission or from the Aristotle CLI. It needs to inspect, cancel, or download artifacts for that specific project without enumerating account-level project history.
+**Scenario:** The Aristotle agent asks a clarifying question while processing a follow-up.
 
 **Flow:**
+
+```text
+ask_project(
+  project_id="project-123",
+  prompt="Which statement should receive the next proof attempt?"
+)
+-> {"task_id": "task-789", "status": "queued", ...}
+
+wait_task("task-789", timeout_seconds=60)
+-> {
+     "outcome": "waiting_for_answer",
+     "task": {"task_id": "task-789", "status": "in_progress", ...},
+     "question": {
+       "event_id": "event-012",
+       "event_type": "agent_question",
+       "status": "sent",
+       "content": "Which theorem should I address first?",
+       ...
+     }
+   }
+
+answer_question("event-012", "Start with the induction lemma.")
+-> {"event_id": "event-012", "status": "complete", ...}
+
+wait_task("task-789", timeout_seconds=60)
 ```
-AI: "I'll check that Aristotle project by ID."
-→ get_project(project_id="abc-123")
-→ {"status": "in_progress", "raw_status": "IN_PROGRESS", "percent_complete": 45}
 
-AI: "This job was submitted with the wrong statement, so I'll cancel it."
-→ cancel_project(project_id="abc-123")
-→ {"status": "canceled", "raw_status": "CANCELED"}
+**Tools:** `ask_project`, `wait_task`, `get_event`, `list_task_events`, and `answer_question`.
+
+**When to use:** `wait_task` returns `waiting_for_answer` or task Events show a `sent` `agent_question`. Keep the `event_id`; `project_id` and `task_id` cannot substitute for it.
+
+## Story 5: Continue A Project With Instructions And Files
+
+**Scenario:** The user wants to change the direction of work after a Project becomes idle.
+
+**Flow:**
+
+```text
+get_project("project-123")
+-> {"project_id": "project-123", "status": "idle", ...}
+
+continue_project(
+  project_id="project-123",
+  prompt="Use this supporting lemma and prove the remaining statements.",
+  files=["src/MyProject/Supporting.lean"]
+)
+-> {"project_id": "project-123", "task_id": "task-999", "status": "queued", ...}
 ```
 
-**Artifact flow:**
+**Tools:** `get_project`, `continue_project`, and `wait_task`.
+
+**When to use:** The follow-up is an instruction, not a question. `continue_project` uses native `INSTRUCT`; `ask_project` uses native `ASK`. Optional files are accepted only while the native Project is idle, so refresh the Project first when this matters.
+
+## Story 6: Inspect Project History Without Guessing IDs
+
+**Scenario:** An assistant has a Project ID from a previous operation and needs to inspect its tasks and events.
+
+**Flow:**
+
+```text
+get_project("project-123")
+-> {"project_id": "project-123", "status": "running", ...}
+
+list_project_tasks("project-123", newest_first=true)
+-> {
+     "tasks": [
+       {"task_id": "task-999", "status": "in_progress", ...},
+       {"task_id": "task-456", "status": "complete", ...}
+     ],
+     "next_pagination_key": null
+   }
+
+list_task_events("task-999", newest_first=true)
+-> {"events": [{"event_id": "event-012", "event_type": "message", ...}], ...}
 ```
-AI: "The job is complete. I'll download the solution archive."
-→ get_solution(project_id="xyz-789", output_path="aristotle-result.tar.gz")
-→ {"status": "saved", "output_path": ".../aristotle-result.tar.gz"}
 
-AI: "I'll also fetch the exact input Aristotle received."
-→ get_input(project_id="xyz-789", output_path="aristotle-input.tar.gz")
-→ {"status": "saved", "output_path": ".../aristotle-input.tar.gz"}
+**Tools:** `get_project`, `list_projects`, `list_project_tasks`, `get_task`, `list_task_events`, and `get_event`.
+
+**When to use:** Inspect state rather than re-submitting a request. Native pagination keys are passed to the next list call unchanged. `list_projects` is part of the final API and returns native account-visible Project records.
+
+## Story 7: Cancel The Correct Unit Of Work
+
+**Scenario:** A new AgentTask was submitted with the wrong instruction, but the Project is still valuable.
+
+**Flow:**
+
+```text
+get_task("task-999")
+-> {"task_id": "task-999", "project_id": "project-123", "status": "queued", ...}
+
+cancel_task("task-999")
+-> {"task_id": "task-999", "project_id": "project-123", "status": "canceled", ...}
 ```
 
-**Tools:** `get_project(project_id)`, `cancel_project(project_id)`, `get_solution(project_id)`, `get_solution_if_complete(project_id)`, `get_input(project_id)`
+**Tool:** `cancel_task(task_id)`.
 
-**When to use:** You already have a project ID and need lifecycle operations. The MCP intentionally does not expose account-level project listing.
+**When to use:** Cancel the AgentTask, not an invented project job. The Project and its earlier task history remain addressable by `project_id`.
 
----
+## Story 8: Retrieve A Project Archive Safely
 
-## API Timing Expectations
+**Scenario:** The assistant needs the full archive after a task finishes, perhaps because the result includes more than one file.
 
-Based on testing, AI assistants should expect:
+**Flow:**
 
-- **Queue time:** 30-60 seconds typical
-- **Simple proofs:** 1-2 minutes total
-- **Complex proofs:** 2-5+ minutes
+```text
+download_project_files(
+  project_id="project-123",
+  output_path="artifacts/project-123.tar.gz"
+)
+-> {
+     "status": "complete",
+     "project_id": "project-123",
+     "output_path": "/workspace/artifacts/project-123.tar.gz",
+     "message": "Project files downloaded"
+   }
+```
 
-The async workflow (Story 3) is recommended for anything non-trivial.
+**Tool:** `download_project_files(project_id, output_path=None, overwrite=False)`.
+
+**When to use:** A caller wants the native archive. The destination is reserved and written atomically. A pre-existing destination is rejected unless `overwrite=true` is explicit.
+
+## Story 9: Formalize A Natural-Language Statement
+
+**Scenario:** A user has a mathematical claim and a local Lean definition that supplies context.
+
+**Flow:**
+
+```text
+formalize(
+  description="The sum of two even natural numbers is even.",
+  prove=true,
+  context_file="src/MyProject/Definitions.lean",
+  wait=false
+)
+-> {
+     "project_id": "project-321",
+     "task_id": "task-654",
+     "status": "queued",
+     "code": null,
+     ...
+   }
+
+wait_task("task-654", timeout_seconds=300)
+```
+
+**Tools:** `formalize` and `wait_task`.
+
+**When to use:** Convert prose to Lean, optionally requesting a proof. `formalize` accepts exactly one optional `context_file`, while `prove` accepts a list named `context_files`. The workflow stages `description.txt` and asks for `formalize.lean`.
+
+## Mock Mode For Local Workflows
+
+**Scenario:** A contributor wants to test tool integration without an API key or a network request.
+
+**Flow:**
+
+```text
+ARISTOTLE_MOCK=true make run-mock
+
+submit_project(prompt="Prove the theorem", project_dir="tests/lean_project")
+-> native-shaped Project and AgentTask results from the in-memory mock
+```
+
+**When to use:** Offline tests, MCP setup checks, and workflow development. Mock mode mirrors the server's public objects and question flow, but it is not proof evidence from the live Aristotle service. Use the opt-in `make test-api` only when a paid live integration check is explicitly required.
