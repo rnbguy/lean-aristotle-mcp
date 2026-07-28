@@ -80,7 +80,10 @@ async def wait_task(
             question = _unanswered_question(task)
             if question is not None:
                 return WaitTaskResult(
-                    "waiting_for_answer", _task_result(task), question, "Task is waiting for an answer."
+                    "waiting_for_answer",
+                    _task_result(task),
+                    question,
+                    "Task is waiting for an answer.",
                 )
             return WaitTaskResult(
                 "timed_out",
