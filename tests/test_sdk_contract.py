@@ -50,6 +50,7 @@ def test_project_dependencies_are_current() -> None:
         "pathspec>=1.1.1",
     ]
     assert project["project"]["optional-dependencies"]["dev"] == [
+        "build>=1.5.0",
         "mypy>=2.3.0",
         "ruff>=0.16.0",
         "pytest>=9.1.1",
