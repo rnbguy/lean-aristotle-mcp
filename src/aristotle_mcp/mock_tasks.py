@@ -6,7 +6,7 @@ import math
 
 from aristotlelib import EventStatus, EventType, ProjectStatus, TaskStatus
 
-from aristotle_mcp.mock_state import MockEvent, MockTask, now, state
+from aristotle_mcp.mock_state import MockEvent, MockProject, MockTask, now, state
 from aristotle_mcp.models import (
     ErrorResult,
     EventResult,
@@ -93,15 +93,7 @@ async def wait_task(
             )
         project = state.projects.get(task.project_id)
         if project is not None:
-            terminal_statuses = _terminal_statuses()
-            project.status = (
-                ProjectStatus.IDLE
-                if all(
-                    state.tasks[project_task_id].status in terminal_statuses
-                    for project_task_id in project.task_ids
-                )
-                else ProjectStatus.RUNNING
-            )
+            _update_project_status(project)
         return WaitTaskResult(
             "terminal",
             _task_result(task),
@@ -119,6 +111,18 @@ def _terminal_statuses() -> frozenset[TaskStatus]:
             TaskStatus.FAILED,
             TaskStatus.CANCELED,
         }
+    )
+
+
+def _update_project_status(project: MockProject) -> None:
+    terminal_statuses = _terminal_statuses()
+    project.status = (
+        ProjectStatus.IDLE
+        if all(
+            state.tasks[project_task_id].status in terminal_statuses
+            for project_task_id in project.task_ids
+        )
+        else ProjectStatus.RUNNING
     )
 
 
@@ -157,5 +161,5 @@ async def cancel_task(task_id: str) -> TaskResult | ErrorResult:
         task.last_updated_at = now()
         project = state.projects.get(task.project_id)
         if project is not None:
-            project.status = ProjectStatus.IDLE
+            _update_project_status(project)
         return _task_result(task)

@@ -147,6 +147,23 @@ async def test_terminal_wait_keeps_project_running_with_queued_sibling() -> None
 
 
 @pytest.mark.asyncio
+async def test_cancel_keeps_project_running_with_queued_sibling() -> None:
+    submission = await submit_project("Initial task")
+
+    assert not isinstance(submission, ErrorResult)
+    project, task = submission
+    assert task is not None
+    sibling = await continue_project(project.project_id, "Follow-up task")
+    assert not isinstance(sibling, ErrorResult)
+    canceled = await cancel_task(task.task_id)
+
+    assert not isinstance(canceled, ErrorResult)
+    assert canceled.status == "canceled"
+    assert sibling.status == "queued"
+    assert state.projects[project.project_id].status is ProjectStatus.RUNNING
+
+
+@pytest.mark.asyncio
 async def test_disabled_question_setting_creates_only_message_event() -> None:
     submission = await submit_project(
         "Prove the theorem",
