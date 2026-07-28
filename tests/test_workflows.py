@@ -5,6 +5,7 @@ import tarfile
 import pytest
 
 from aristotle_mcp import mock_tasks, mock_workflows, workflows
+from aristotle_mcp.files import _copy_lean_from_solution_archive
 from aristotle_mcp.mock_state import reset_state, state
 from aristotle_mcp.models import (
     ErrorResult,
@@ -719,3 +720,45 @@ async def test_archive_extraction_rejects_unsafe_member(
 
     with pytest.raises(ValueError):
         workflows._read_lean_from_solution_archive(str(archive))
+
+
+@pytest.mark.asyncio
+async def test_production_workflow_classifies_unsafe_solution_archive_as_archive(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    source = tmp_path / "proof.lean"
+    source.write_text("theorem demo : True := by sorry")
+    output = tmp_path / "output.lean"
+    archive = tmp_path / "unsafe.tar.gz"
+    with tarfile.open(archive, "w:gz") as result:
+        info = tarfile.TarInfo("../escape.lean")
+        info.size = 1
+        result.addfile(info, io.BytesIO(b"x"))
+
+    async def submit(_prompt: str, project_dir: str | None = None):
+        _ = project_dir
+        return ProjectResult("project", "running", "now", "now", None, True, True), TaskResult(
+            "project", "task", "complete", "now", "now", None, None, None, None
+        )
+
+    async def wait(_task_id: str) -> WaitTaskResult:
+        task = TaskResult("project", "task", "complete", "now", "now", None, None, None, None)
+        return WaitTaskResult("terminal", task, None, "Task reached a terminal status.")
+
+    async def copy_code(
+        _project_id: str, output_path: str, _preferred_filename: str | None
+    ) -> str | None:
+        _copy_lean_from_solution_archive(str(archive), output_path)
+        return output_path
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    monkeypatch.setattr(workflows, "wait_task", wait)
+    monkeypatch.setattr(workflows, "_copy_code", copy_code)
+
+    result = await workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult(
+        "error", "archive", "Unsafe path in solution archive: ../escape.lean"
+    )

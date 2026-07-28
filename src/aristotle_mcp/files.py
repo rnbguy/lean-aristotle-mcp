@@ -10,6 +10,10 @@ import tempfile
 _logger = logging.getLogger(__name__)
 
 
+class _UnsafeArchiveMemberError(tarfile.TarError, ValueError):
+    pass
+
+
 def _find_unique_path(path: str, max_attempts: int = 1000) -> str:
     candidates = [path] + [
         f"{os.path.splitext(path)[0]}.{i}{os.path.splitext(path)[1]}"
@@ -78,7 +82,7 @@ def _validate_archive_member(member_name: str, extract_dir: str) -> None:
     destination = os.path.realpath(os.path.join(extract_dir, member_name))
     extract_root = os.path.realpath(extract_dir)
     if os.path.commonpath([extract_root, destination]) != extract_root:
-        raise ValueError(f"Unsafe path in solution archive: {member_name}")
+        raise _UnsafeArchiveMemberError(f"Unsafe path in solution archive: {member_name}")
 
 
 def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
@@ -86,7 +90,7 @@ def _extract_solution_archive(solution_path: str, extract_dir: str) -> None:
         for member in tar.getmembers():
             _validate_archive_member(member.name, extract_dir)
             if member.issym() or member.islnk():
-                raise ValueError(f"Unsafe link in solution archive: {member.name}")
+                raise _UnsafeArchiveMemberError(f"Unsafe link in solution archive: {member.name}")
         if hasattr(tarfile, "data_filter"):
             tar.extractall(extract_dir, filter="data")
         else:
