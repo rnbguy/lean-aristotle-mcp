@@ -72,10 +72,24 @@ def _remove_reserved_path(path: str, reserved: bool) -> None:
     if not reserved or not os.path.exists(path):
         return
     try:
-        if os.path.getsize(path) == 0:
-            os.unlink(path)
+        is_empty = os.path.getsize(path) == 0
     except OSError:
-        _logger.debug("Could not remove reserved download path: %s", path, exc_info=True)
+        _log_cleanup_failure(path, recursive=False)
+        return
+    if is_empty:
+        _best_effort_remove(path)
+
+
+def _log_cleanup_failure(path: str | os.PathLike[str], *, recursive: bool) -> None:
+    _logger.debug(
+        "Best-effort cleanup failed",
+        exc_info=True,
+        extra={
+            "reason": "best_effort_cleanup",
+            "cleanup_path": os.fspath(path),
+            "recursive": recursive,
+        },
+    )
 
 
 def _best_effort_remove(path: str | os.PathLike[str], *, recursive: bool = False) -> None:
@@ -87,15 +101,7 @@ def _best_effort_remove(path: str | os.PathLike[str], *, recursive: bool = False
     except FileNotFoundError:
         return
     except OSError:
-        _logger.debug(
-            "Best-effort cleanup failed",
-            exc_info=True,
-            extra={
-                "reason": "best_effort_cleanup",
-                "cleanup_path": os.fspath(path),
-                "recursive": recursive,
-            },
-        )
+        _log_cleanup_failure(path, recursive=recursive)
 
 
 def _validate_archive_member(member_name: str, extract_dir: str) -> None:

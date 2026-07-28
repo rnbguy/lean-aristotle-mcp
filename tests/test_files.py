@@ -14,6 +14,7 @@ from aristotle_mcp.files import (
     _extract_solution_archive,
     _find_lean_file,
     _find_unique_path,
+    _remove_reserved_path,
     _reserve_download_path,
 )
 
@@ -251,9 +252,26 @@ def test_cleanup_logs_failures(tmp_path, caplog, monkeypatch):
     path.write_text("")
     monkeypatch.setattr(os, "unlink", lambda _: (_ for _ in ()).throw(OSError("no")))
     with caplog.at_level(logging.DEBUG):
-        from aristotle_mcp.files import _remove_reserved_path
         _remove_reserved_path(str(path), True)
-    assert "Could not remove reserved download path" in caplog.text
+    record = next(record for record in caplog.records if record.reason == "best_effort_cleanup")
+    assert record.cleanup_path == str(path)
+    assert record.recursive is False
+
+
+def test_reserved_cleanup_logs_getsize_failure(tmp_path, caplog, monkeypatch):
+    path = tmp_path / "reserved"
+    path.write_text("")
+
+    def fail_getsize(_path):
+        raise OSError("size failed")
+
+    monkeypatch.setattr(os.path, "getsize", fail_getsize)
+    with caplog.at_level(logging.DEBUG):
+        _remove_reserved_path(str(path), True)
+
+    record = next(record for record in caplog.records if record.reason == "best_effort_cleanup")
+    assert record.cleanup_path == str(path)
+    assert record.recursive is False
 
 
 def test_best_effort_cleanup_logs_structured_failure(tmp_path, caplog, monkeypatch):
