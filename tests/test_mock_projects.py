@@ -301,3 +301,47 @@ async def test_mock_download_returns_primary_error_when_temporary_cleanup_raises
     result = await mock_downloads.download_project_files(project.project_id, str(output))
 
     assert result == ErrorResult("error", "filesystem", "Could not write project files")
+
+
+@pytest.mark.asyncio
+async def test_mock_download_translates_reservation_permission_error(tmp_path, monkeypatch) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "Main.lean").write_text("theorem main : True := by trivial\n")
+    submission = await submit_project("first", str(project_dir))
+    output = tmp_path / "project.tar.gz"
+
+    def fail_reservation(*_args, **_kwargs) -> tuple[str, bool]:
+        raise PermissionError("reservation denied")
+
+    assert not isinstance(submission, ErrorResult)
+    project, _ = submission
+    monkeypatch.setattr(mock_downloads, "_reserve_download_path", fail_reservation)
+    result = await mock_downloads.download_project_files(project.project_id, str(output))
+
+    assert result == ErrorResult("error", "filesystem", "reservation denied")
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_download_rolls_back_unexpected_replace_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "Main.lean").write_text("theorem main : True := by trivial\n")
+    submission = await submit_project("first", str(project_dir))
+    output = tmp_path / "project.tar.gz"
+
+    def fail_replace(_source: str, _destination: str) -> None:
+        raise RuntimeError("replace failed")
+
+    assert not isinstance(submission, ErrorResult)
+    project, _ = submission
+    monkeypatch.setattr(mock_downloads.os, "replace", fail_replace)
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        await mock_downloads.download_project_files(project.project_id, str(output))
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".project.tar.gz.*"))

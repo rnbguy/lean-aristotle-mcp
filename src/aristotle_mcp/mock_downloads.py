@@ -9,6 +9,7 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 
+from aristotle_mcp.errors import error_result
 from aristotle_mcp.files import _best_effort_remove, _remove_reserved_path, _reserve_download_path
 from aristotle_mcp.mock_state import MockProject, state
 from aristotle_mcp.models import ErrorResult, ProjectFilesResult
@@ -53,8 +54,9 @@ async def download_project_files(
             ".tar.gz",
             overwrite,
         )
-    except FileExistsError:
-        return ErrorResult("error", "filesystem", f"Output file already exists: {output_path}")
+    except OSError as error:
+        return error_result(error)
+    committed = False
     temporary: Path | None = None
     try:
         fd, temporary_name = tempfile.mkstemp(
@@ -65,13 +67,14 @@ async def download_project_files(
         with os.fdopen(fd, "wb") as file:
             file.write(archive)
         os.replace(temporary, destination)
+        committed = True
         temporary = None
     except OSError:
-        _remove_reserved_path(destination, reserved)
         return ErrorResult("error", "filesystem", "Could not write project files")
     finally:
         if temporary is not None:
             _best_effort_remove(temporary)
+        _remove_reserved_path(destination, reserved and not committed)
     return ProjectFilesResult(
         "complete",
         project_id,
