@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import tarfile
 
@@ -13,7 +14,24 @@ from aristotle_mcp.models import (
     ProjectResult,
     TaskResult,
     WaitTaskResult,
+    WorkflowResult,
 )
+
+
+def assert_best_effort_cleanup_log(caplog: pytest.LogCaptureFixture, path: str) -> None:
+    cleanup_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "reason", None) == "best_effort_cleanup"
+    ]
+    assert [
+        (
+            getattr(record, "reason", None),
+            getattr(record, "cleanup_path", None),
+            getattr(record, "recursive", None),
+        )
+        for record in cleanup_records
+    ] == [("best_effort_cleanup", path, True)]
 
 
 @pytest.fixture(autouse=True)
@@ -653,6 +671,196 @@ async def test_mock_submit_cleans_partial_output_after_write_failure(
 
     assert result == ErrorResult("error", "filesystem", "write failed")
     assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_download_code_preserves_code_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = tmp_path / "download"
+
+    class DownloadProject:
+        has_files = True
+
+        @classmethod
+        async def from_id(cls, _project_id: str):
+            return cls()
+
+        async def refresh(self) -> None:
+            return None
+
+        async def get_files(self, archive_path: str) -> str:
+            return archive_path
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(workflows, "Project", DownloadProject)
+    monkeypatch.setattr(workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(
+        workflows, "_read_lean_from_solution_archive", lambda _archive, _preferred: "code"
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        result = await workflows._download_code("project", "proof.lean")
+
+    assert result == "code"
+    assert_best_effort_cleanup_log(caplog, str(directory))
+
+
+@pytest.mark.asyncio
+async def test_copy_code_preserves_download_error_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = tmp_path / "copy"
+
+    class DownloadProject:
+        has_files = True
+
+        @classmethod
+        async def from_id(cls, _project_id: str):
+            return cls()
+
+        async def refresh(self) -> None:
+            return None
+
+        async def get_files(self, _archive_path: str) -> str:
+            raise OSError("download failed")
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(workflows, "Project", DownloadProject)
+    monkeypatch.setattr(workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(OSError, match="download failed"):
+        await workflows._copy_code("project", str(tmp_path / "output.lean"), "proof.lean")
+
+    assert_best_effort_cleanup_log(caplog, str(directory))
+
+
+@pytest.mark.asyncio
+async def test_production_prove_preserves_success_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    directory = tmp_path / "prove"
+    expected = WorkflowResult("queued", "project", "task", None, None, None, "Project submitted.")
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    async def submit_and_wait(*_args, **_kwargs) -> WorkflowResult:
+        return expected
+
+    monkeypatch.setattr(workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(workflows, "_submit_and_wait", submit_and_wait)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await workflows.prove("theorem demo : True := by sorry", wait=False)
+
+    assert result == expected
+    assert_best_effort_cleanup_log(caplog, str(directory))
+
+
+@pytest.mark.asyncio
+async def test_production_formalize_preserves_primary_error_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    directory = tmp_path / "formalize"
+    expected = ErrorResult("error", "api", "primary failure")
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    async def submit_and_wait(*_args, **_kwargs) -> ErrorResult:
+        return expected
+
+    monkeypatch.setattr(workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(workflows, "_submit_and_wait", submit_and_wait)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await workflows.formalize("True is provable.", wait=False)
+
+    assert result == expected
+    assert_best_effort_cleanup_log(caplog, str(directory))
+
+
+@pytest.mark.asyncio
+async def test_mock_prove_preserves_success_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = tmp_path / "mock-prove"
+    expected = WorkflowResult("queued", "project", "task", None, None, None, "Project submitted.")
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    async def submit(*_args, **_kwargs) -> WorkflowResult:
+        return expected
+
+    monkeypatch.setattr(mock_workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(mock_workflows, "_submit", submit)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await mock_workflows.prove("theorem demo : True := by sorry", wait=False)
+
+    assert result == expected
+    assert_best_effort_cleanup_log(caplog, str(directory))
+
+
+@pytest.mark.asyncio
+async def test_mock_formalize_preserves_primary_error_when_cleanup_raises(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = tmp_path / "mock-formalize"
+    expected = ErrorResult("error", "api", "primary failure")
+
+    def create_directory(*_args, **_kwargs) -> str:
+        directory.mkdir()
+        return str(directory)
+
+    def fail_rmtree(*_args, **_kwargs) -> None:
+        raise OSError("cleanup failed")
+
+    async def submit(*_args, **_kwargs) -> ErrorResult:
+        return expected
+
+    monkeypatch.setattr(mock_workflows.tempfile, "mkdtemp", create_directory)
+    monkeypatch.setattr(files.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(mock_workflows, "_submit", submit)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await mock_workflows.formalize("True is provable.", wait=False)
+
+    assert result == expected
+    assert_best_effort_cleanup_log(caplog, str(directory))
 
 
 @pytest.mark.asyncio

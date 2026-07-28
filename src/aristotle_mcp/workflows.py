@@ -13,6 +13,7 @@ from aristotlelib.local_file_utils import LeanProjectError
 from aristotle_mcp.config import is_mock_mode
 from aristotle_mcp.errors import error_result
 from aristotle_mcp.files import (
+    _best_effort_remove,
     _canonicalize_path,
     _copy_lean_from_solution_archive,
     _lake_root,
@@ -63,10 +64,13 @@ async def _download_code(project_id: str, preferred_filename: str | None = None)
     await project.refresh()
     if not project.has_files:
         return None
-    with tempfile.TemporaryDirectory() as directory:
+    directory = tempfile.mkdtemp()
+    try:
         archive_path = os.path.join(directory, "result.tar.gz")
         downloaded = await project.get_files(archive_path)
         return _read_lean_from_solution_archive(str(downloaded), preferred_filename)
+    finally:
+        _best_effort_remove(directory, recursive=True)
 
 
 async def _copy_code(
@@ -78,7 +82,8 @@ async def _copy_code(
     await project.refresh()
     if not project.has_files:
         return None
-    with tempfile.TemporaryDirectory() as directory:
+    directory = tempfile.mkdtemp()
+    try:
         archive_path = os.path.join(directory, "result.tar.gz")
         downloaded = await project.get_files(archive_path)
         copied = _copy_lean_from_solution_archive(
@@ -87,6 +92,8 @@ async def _copy_code(
             preferred_filename,
         )
         return output_path if copied else None
+    finally:
+        _best_effort_remove(directory, recursive=True)
 
 
 async def _submit_and_wait(
@@ -171,7 +178,8 @@ async def prove(
     if not code.strip():
         return ErrorResult("error", "validation", "code is required")
     try:
-        with tempfile.TemporaryDirectory() as directory:
+        directory = tempfile.mkdtemp()
+        try:
             with open(os.path.join(directory, "proof.lean"), "w", encoding="utf-8") as file:
                 if hint is not None:
                     file.write(f"-- Hint: {hint}\n")
@@ -183,6 +191,8 @@ async def prove(
                 wait,
                 preferred_filename="proof.lean",
             )
+        finally:
+            _best_effort_remove(directory, recursive=True)
     except (OSError, ValueError) as error:
         return error_result(error)
 
@@ -255,7 +265,8 @@ async def formalize(
     if not description.strip():
         return ErrorResult("error", "validation", "description is required")
     try:
-        with tempfile.TemporaryDirectory() as directory:
+        directory = tempfile.mkdtemp()
+        try:
             with open(os.path.join(directory, "description.txt"), "w", encoding="utf-8") as file:
                 file.write(description)
             contexts = [context_file] if context_file is not None else []
@@ -268,5 +279,7 @@ async def formalize(
             return await _submit_and_wait(
                 directory, prompt, wait, preferred_filename="formalize.lean"
             )
+        finally:
+            _best_effort_remove(directory, recursive=True)
     except (OSError, ValueError) as error:
         return error_result(error)

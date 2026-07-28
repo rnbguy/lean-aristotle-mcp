@@ -104,12 +104,15 @@ async def prove(
     if not code.strip():
         return ErrorResult("error", "validation", "code is required")
     try:
-        with tempfile.TemporaryDirectory() as directory:
+        directory = tempfile.mkdtemp()
+        try:
             path = Path(directory) / "proof.lean"
             text = f"-- Hint: {hint}\n{code}" if hint is not None else code
             path.write_text(text, encoding="utf-8")
             _stage_context_files(directory, context_files or [], {"proof.lean"})
             return await _submit(directory, "Please prove all sorry statements.", wait, code, None)
+        finally:
+            _best_effort_remove(directory, recursive=True)
     except (OSError, ValueError) as error:
         return ErrorResult("error", "validation", str(error))
 
@@ -150,7 +153,8 @@ async def formalize(
     if not description.strip():
         return ErrorResult("error", "validation", "description is required")
     try:
-        with tempfile.TemporaryDirectory() as directory:
+        directory = tempfile.mkdtemp()
+        try:
             path = Path(directory) / "description.txt"
             path.write_text(description, encoding="utf-8")
             contexts = [context_file] if context_file is not None else []
@@ -163,5 +167,7 @@ async def formalize(
                 "as formalize.lean."
             )
             return await _submit(directory, prompt, wait, code, None)
+        finally:
+            _best_effort_remove(directory, recursive=True)
     except (OSError, ValueError) as error:
         return ErrorResult("error", "validation", str(error))
