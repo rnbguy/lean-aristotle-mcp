@@ -59,7 +59,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "aristotlelib", specifier = ">=2.1.0" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.5.0" },
-    { name = "mcp", specifier = ">=1.28.1" },
+    { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "pathspec", specifier = ">=1.1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },

@@ -43,7 +43,7 @@ def test_public_exports() -> None:
 def test_project_dependencies_are_current() -> None:
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
     assert project["project"]["dependencies"] == [
-        "mcp>=1.28.1",
+        "mcp>=1.28.1,<2",
         "python-dotenv>=1.2.2",
         "aristotlelib>=2.1.0",
         "anyio>=4.14.2",
