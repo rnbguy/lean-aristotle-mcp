@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import posixpath
 import shutil
 import tarfile
 import tempfile
@@ -98,7 +99,15 @@ def _find_lean_file(extract_dir: str, preferred_filename: str | None = None) -> 
         dirs.sort()
         paths.extend(os.path.join(root, filename) for filename in sorted(files))
     if preferred_filename is not None:
-        preferred = [path for path in paths if os.path.basename(path) == preferred_filename]
+        preferred_path = posixpath.normpath(preferred_filename.replace("\\", "/"))
+        preferred = [
+            path
+            for path in paths
+            if posixpath.normpath(
+                os.path.relpath(path, extract_dir).replace(os.sep, "/")
+            )
+            == preferred_path
+        ]
         if preferred:
             return preferred[0]
         return None

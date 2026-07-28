@@ -205,6 +205,44 @@ async def test_prove_file_submits_nearest_lake_ancestor(
 
 
 @pytest.mark.asyncio
+async def test_prove_file_preserves_lake_relative_source_identity(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    project = tmp_path / "project"
+    nested = project / "src" / "nested"
+    nested.mkdir(parents=True)
+    (project / "lakefile.toml").write_text('name = "fixture"\n')
+    source = nested / "Target.lean"
+    source.write_text("theorem target : True := by sorry\n")
+    submitted: list[tuple[str, str, bool, str | None, str | None]] = []
+
+    async def submit_and_wait(
+        directory: str,
+        prompt: str,
+        wait: bool,
+        output_path: str | None = None,
+        preferred_filename: str | None = None,
+    ) -> ErrorResult:
+        submitted.append((directory, prompt, wait, output_path, preferred_filename))
+        return ErrorResult("error", "api", "stop")
+
+    monkeypatch.setattr(workflows, "_submit_and_wait", submit_and_wait)
+    result = await workflows.prove_file(str(source), wait=False)
+
+    assert result == ErrorResult("error", "api", "stop")
+    assert submitted == [
+        (
+            str(project),
+            "Please prove all sorry statements in src/nested/Target.lean.",
+            False,
+            None,
+            "src/nested/Target.lean",
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mock_prove_file_reserves_output_before_submission(tmp_path) -> None:
     reset_state()
     source = tmp_path / "proof.lean"
@@ -282,9 +320,10 @@ async def test_mock_prove_file_submits_nearest_lake_ancestor(
     source = nested / "Target.lean"
     source.write_text("theorem target : True := by sorry\n")
     submitted: list[str] = []
+    prompts: list[str] = []
 
     async def submit(prompt: str, project_dir: str | None = None) -> ErrorResult:
-        _ = prompt
+        prompts.append(prompt)
         submitted.append(project_dir or "")
         return ErrorResult("error", "api", "stop")
 
@@ -293,6 +332,7 @@ async def test_mock_prove_file_submits_nearest_lake_ancestor(
 
     assert isinstance(result, ErrorResult)
     assert submitted == [str(project)]
+    assert prompts == ["Please prove all sorry statements in src/nested/Target.lean."]
 
 
 @pytest.mark.asyncio

@@ -201,12 +201,14 @@ async def prove_file(
 
         return await mock_prove_file(file_path, output_path, wait)
     final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
+    lake_root = _lake_root(canonical)
+    source_path = os.path.relpath(canonical, lake_root).replace(os.sep, "/")
     return await _submit_and_wait(
-        _lake_root(canonical),
-        f"Please prove all sorry statements in {os.path.basename(canonical)}.",
+        lake_root,
+        f"Please prove all sorry statements in {source_path}.",
         wait,
         _canonicalize_path(final_output) if wait else None,
-        os.path.basename(canonical),
+        source_path,
     )
 
 

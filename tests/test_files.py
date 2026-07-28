@@ -61,7 +61,46 @@ def test_archive_selection_and_atomic_copy(tmp_path):
     duplicate_dir.mkdir()
     _extract_solution_archive(str(duplicate), str(duplicate_dir))
     selected = _find_lean_file(str(duplicate_dir), "shared.lean")
-    assert selected is not None and selected.endswith("a/shared.lean")
+    assert selected is None
+
+
+def test_archive_selection_matches_exact_directory_preferred_path(tmp_path):
+    archive = tmp_path / "duplicate-target.tar.gz"
+    make_archive(
+        archive,
+        [
+            ("src/nested/Target.lean", b"source"),
+            ("other/Target.lean", b"other"),
+        ],
+    )
+    extract_dir = tmp_path / "duplicate-target-extract"
+    extract_dir.mkdir()
+    _extract_solution_archive(str(archive), str(extract_dir))
+
+    assert _find_lean_file(
+        str(extract_dir), "src/nested/Target.lean"
+    ) == str(extract_dir / "src" / "nested" / "Target.lean")
+    assert _find_lean_file(
+        str(extract_dir), r"src\nested\Target.lean"
+    ) == str(extract_dir / "src" / "nested" / "Target.lean")
+    assert _find_lean_file(str(extract_dir), "missing/Target.lean") is None
+    assert _find_lean_file(str(extract_dir), "Target.lean") is None
+
+    output = tmp_path / "Target.lean"
+    assert _copy_lean_from_solution_archive(
+        str(archive), str(output), "src/nested/Target.lean"
+    )
+    assert output.read_text() == "source"
+
+
+def test_archive_selection_does_not_match_nested_file_for_root_preference(tmp_path):
+    archive = tmp_path / "nested-target.tar.gz"
+    make_archive(archive, [("nested/Target.lean", b"nested")])
+    extract_dir = tmp_path / "nested-target-extract"
+    extract_dir.mkdir()
+    _extract_solution_archive(str(archive), str(extract_dir))
+
+    assert _find_lean_file(str(extract_dir), "Target.lean") is None
 
 
 def test_archive_rejects_escape_and_links(tmp_path):

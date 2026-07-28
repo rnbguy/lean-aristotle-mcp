@@ -123,9 +123,11 @@ async def prove_file(
         return ErrorResult("error", "validation", f"File not found: {file_path}")
     code = Path(canonical).read_text(encoding="utf-8")
     final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
-    prompt = f"Please prove all sorry statements in {os.path.basename(canonical)}."
+    lake_root = _lake_root(canonical)
+    source_path = os.path.relpath(canonical, lake_root).replace(os.sep, "/")
+    prompt = f"Please prove all sorry statements in {source_path}."
     return await _submit(
-        _lake_root(canonical),
+        lake_root,
         prompt,
         wait,
         code,
