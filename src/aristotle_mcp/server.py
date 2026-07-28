@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from importlib.metadata import version
 
 from aristotlelib import AgentQuestionsSetting, ProjectStatus
 from mcp.server import MCPServer
@@ -23,6 +24,7 @@ from aristotle_mcp.workflows import formalize, prove, prove_file
 
 mcp: MCPServer[None] = MCPServer(
     name="aristotle-mcp",
+    version=version("aristotle-mcp"),
     instructions=(
         "Native aristotlelib 2.1 Project, AgentTask, and Event operations for Lean 4. "
         "Use wait_task for bounded polling and answer_question for pending agent questions. "

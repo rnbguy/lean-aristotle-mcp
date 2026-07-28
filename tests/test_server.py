@@ -1,14 +1,14 @@
+from importlib.metadata import version
+from typing import Literal
+
 import pytest
+from mcp import Client
 
 from aristotle_mcp.mock_state import reset_state
 from aristotle_mcp.server import mcp, submit_project_tool
 
-
-@pytest.mark.asyncio
-async def test_server_registers_exact_native_tool_surface() -> None:
-    tools = await mcp.list_tools()
-
-    assert {tool.name for tool in tools} == {
+_TOOL_NAMES = frozenset(
+    {
         "submit_project",
         "list_projects",
         "get_project",
@@ -26,6 +26,14 @@ async def test_server_registers_exact_native_tool_surface() -> None:
         "prove_file",
         "formalize",
     }
+)
+
+
+@pytest.mark.asyncio
+async def test_server_registers_exact_native_tool_surface() -> None:
+    tools = await mcp.list_tools()
+
+    assert {tool.name for tool in tools} == _TOOL_NAMES
     schemas = {tool.name: tool.input_schema for tool in tools}
     assert all(tool.description for tool in tools)
     assert set(schemas["submit_project"]["properties"]) == {
@@ -56,6 +64,19 @@ async def test_server_describes_mathlib_tactic_requirement() -> None:
     assert "import Mathlib.Tactic" in (tools["prove"].description or "")
     assert "import Mathlib.Tactic" in (tools["prove_file"].description or "")
     assert "import Mathlib.Tactic" in (tools["formalize"].description or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "legacy"])
+async def test_server_client_negotiates_in_memory(mode: Literal["auto", "legacy"]) -> None:
+    async with Client(mcp, mode=mode) as client:
+        tools = await client.list_tools()
+        server_info = client.server_info
+
+    assert server_info is not None
+    assert server_info.name == "aristotle-mcp"
+    assert server_info.version == version("aristotle-mcp")
+    assert {tool.name for tool in tools.tools} == _TOOL_NAMES
 
 
 @pytest.mark.asyncio
