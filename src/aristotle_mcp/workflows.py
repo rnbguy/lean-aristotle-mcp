@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tarfile
 import tempfile
+from typing import Final
 
 from aristotlelib import AristotleAPIError, Project
 from aristotlelib.local_file_utils import LeanProjectError
@@ -22,6 +23,10 @@ from aristotle_mcp.files import (
 from aristotle_mcp.models import ErrorResult, TaskResult, WaitTaskResult, WorkflowResult
 from aristotle_mcp.projects import submit_project
 from aristotle_mcp.tasks import wait_task
+
+_MAX_CODE_SIZE: Final = 1_000_000
+_MAX_DESCRIPTION_SIZE: Final = 100_000
+_MAX_FILE_SIZE: Final = 10_000_000
 
 
 def _submitted(project_id: str, task: TaskResult) -> WorkflowResult:
@@ -143,6 +148,16 @@ async def prove(
     wait: bool = True,
 ) -> WorkflowResult | ErrorResult:
     """Submit a self-contained Lean proof request."""
+    try:
+        code_size = len(code.encode("utf-8"))
+    except UnicodeEncodeError:
+        return ErrorResult("error", "validation", "Code must be UTF-8 encodable.")
+    if code_size > _MAX_CODE_SIZE:
+        return ErrorResult(
+            "error",
+            "validation",
+            f"Code exceeds maximum size of {_MAX_CODE_SIZE} bytes.",
+        )
     if is_mock_mode():
         from aristotle_mcp.mock_workflows import prove as mock_prove
 
@@ -172,13 +187,19 @@ async def prove_file(
     wait: bool = True,
 ) -> WorkflowResult | ErrorResult:
     """Submit the containing Lean project and optionally save its solved file."""
+    canonical = _canonicalize_path(file_path)
+    if not os.path.isfile(canonical):
+        return ErrorResult("error", "validation", f"File not found: {file_path}")
+    if os.path.getsize(canonical) > _MAX_FILE_SIZE:
+        return ErrorResult(
+            "error",
+            "validation",
+            f"File exceeds maximum size of {_MAX_FILE_SIZE} bytes.",
+        )
     if is_mock_mode():
         from aristotle_mcp.mock_workflows import prove_file as mock_prove_file
 
         return await mock_prove_file(file_path, output_path, wait)
-    canonical = _canonicalize_path(file_path)
-    if not os.path.isfile(canonical):
-        return ErrorResult("error", "validation", f"File not found: {file_path}")
     final_output = output_path or f"{os.path.splitext(canonical)[0]}_aristotle.lean"
     return await _submit_and_wait(
         _lake_root(canonical),
@@ -196,6 +217,18 @@ async def formalize(
     wait: bool = True,
 ) -> WorkflowResult | ErrorResult:
     """Submit a natural-language formalization request."""
+    try:
+        description_size = len(description.encode("utf-8"))
+    except UnicodeEncodeError:
+        return ErrorResult(
+            "error", "validation", "Description must be UTF-8 encodable."
+        )
+    if description_size > _MAX_DESCRIPTION_SIZE:
+        return ErrorResult(
+            "error",
+            "validation",
+            f"Description exceeds maximum size of {_MAX_DESCRIPTION_SIZE} bytes.",
+        )
     if is_mock_mode():
         from aristotle_mcp.mock_workflows import formalize as mock_formalize
 

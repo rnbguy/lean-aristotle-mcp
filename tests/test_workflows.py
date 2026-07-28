@@ -1,4 +1,5 @@
 import io
+import os
 import tarfile
 
 import pytest
@@ -22,6 +23,143 @@ async def test_prove_and_formalize_return_both_native_ids_when_not_waiting() -> 
     assert proof.project_id is not None and proof.task_id is not None
     assert not isinstance(formalization, ErrorResult)
     assert formalization.project_id is not None and formalization.task_id is not None
+
+
+@pytest.mark.asyncio
+async def test_prove_accepts_exact_utf8_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    submitted_sizes: list[int] = []
+
+    async def submit(_prompt: str, project_dir: str | None = None) -> ErrorResult:
+        assert project_dir is not None
+        submitted_sizes.append(os.path.getsize(os.path.join(project_dir, "proof.lean")))
+        return ErrorResult("error", "api", "stop")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    await workflows.prove("\u00e9" * (workflows._MAX_CODE_SIZE // 2), wait=False)
+
+    assert submitted_sizes == [workflows._MAX_CODE_SIZE]
+
+
+@pytest.mark.asyncio
+async def test_prove_rejects_one_utf8_byte_over_limit_without_state_mutation() -> None:
+    reset_state()
+    code = "\u00e9" * (workflows._MAX_CODE_SIZE // 2) + "a"
+
+    result = await workflows.prove(code, wait=False)
+
+    assert result == ErrorResult(
+        "error",
+        "validation",
+        "Code exceeds maximum size of 1000000 bytes.",
+    )
+    assert state.projects == {}
+
+
+@pytest.mark.asyncio
+async def test_prove_rejects_non_utf8_encodable_code_without_state_mutation() -> None:
+    reset_state()
+
+    result = await workflows.prove("theorem demo : True := by sorry\ud800", wait=False)
+
+    assert result == ErrorResult(
+        "error",
+        "validation",
+        "Code must be UTF-8 encodable.",
+    )
+    assert "\ud800" not in result.message
+    assert state.projects == {}
+
+
+@pytest.mark.asyncio
+async def test_formalize_accepts_exact_utf8_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    submitted_sizes: list[int] = []
+
+    async def submit(_prompt: str, project_dir: str | None = None) -> ErrorResult:
+        assert project_dir is not None
+        submitted_sizes.append(os.path.getsize(os.path.join(project_dir, "description.txt")))
+        return ErrorResult("error", "api", "stop")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    await workflows.formalize(
+        "\u00e9" * (workflows._MAX_DESCRIPTION_SIZE // 2), wait=False
+    )
+
+    assert submitted_sizes == [workflows._MAX_DESCRIPTION_SIZE]
+
+
+@pytest.mark.asyncio
+async def test_formalize_rejects_one_utf8_byte_over_limit_without_state_mutation() -> None:
+    reset_state()
+    description = "\u00e9" * (workflows._MAX_DESCRIPTION_SIZE // 2) + "a"
+
+    result = await workflows.formalize(description, wait=False)
+
+    assert result == ErrorResult(
+        "error",
+        "validation",
+        "Description exceeds maximum size of 100000 bytes.",
+    )
+    assert state.projects == {}
+
+
+@pytest.mark.asyncio
+async def test_formalize_rejects_non_utf8_encodable_description_without_state_mutation() -> None:
+    reset_state()
+
+    result = await workflows.formalize("True is provable.\ud800", wait=False)
+
+    assert result == ErrorResult(
+        "error",
+        "validation",
+        "Description must be UTF-8 encodable.",
+    )
+    assert "\ud800" not in result.message
+    assert state.projects == {}
+
+
+@pytest.mark.asyncio
+async def test_prove_file_accepts_exact_byte_limit(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARISTOTLE_MOCK", "false")
+    source = tmp_path / "proof.lean"
+    with source.open("wb") as file:
+        file.truncate(workflows._MAX_FILE_SIZE)
+
+    async def submit(_prompt: str, project_dir: str | None = None) -> ErrorResult:
+        return ErrorResult("error", "api", project_dir or "")
+
+    monkeypatch.setattr(workflows, "submit_project", submit)
+    result = await workflows.prove_file(str(source), wait=False)
+
+    assert result == ErrorResult("error", "api", str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_prove_file_rejects_one_byte_over_limit_before_output_reservation(
+    tmp_path,
+) -> None:
+    reset_state()
+    source = tmp_path / "proof.lean"
+    with source.open("wb") as file:
+        file.truncate(workflows._MAX_FILE_SIZE + 1)
+    output = tmp_path / "output.lean"
+
+    result = await workflows.prove_file(str(source), str(output))
+
+    assert result == ErrorResult(
+        "error",
+        "validation",
+        "File exceeds maximum size of 10000000 bytes.",
+    )
+    assert state.projects == {}
+    assert not output.exists()
 
 
 @pytest.mark.asyncio
