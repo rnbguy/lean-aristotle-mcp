@@ -175,7 +175,7 @@ Set `agent_questions_setting=2` (`AgentQuestionsSetting.TIMEOUT_15_MIN`) when cr
 
 `download_project_files` saves the native project archive, typically to a `.tar.gz` destination. It reserves the destination first and writes through a temporary path. Existing paths are never replaced unless `overwrite=true` is explicit.
 
-The Lean workflows apply the same care when reading solution archives. They reject archive members that escape the destination and reject links before extracting a matching Lean file.
+The Lean workflows apply the same care when reading solution archives. They accept only regular files and directories, rejecting absolute paths, parent traversal, symbolic links, hard links, FIFOs, devices, and all other member kinds before extracting a matching Lean file.
 
 ## Lean Workflows
 

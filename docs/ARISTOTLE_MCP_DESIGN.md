@@ -430,7 +430,7 @@ matching file, so the workflow reports that condition without inventing code or 
 
 ## File Safety
 
-Workflow output is treated as an untrusted archive. The archive reader rejects absolute paths, parent traversal, and links before selecting a Lean file. This avoids extracting a service-returned archive into arbitrary local paths.
+Workflow output is treated as an untrusted archive. The archive reader accepts only regular files and directories, rejecting absolute paths, parent traversal, symbolic links, hard links, FIFOs, devices, and all other member kinds before selecting a Lean file. This avoids extracting a service-returned archive into arbitrary local paths.
 
 Output paths are canonicalized and reserved before work begins. A failed workflow removes its reservation, while a successful write uses an atomic replacement. These rules prevent accidental overwrites and partial output files.
 
