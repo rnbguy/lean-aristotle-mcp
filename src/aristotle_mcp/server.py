@@ -27,7 +27,13 @@ mcp: MCPServer[None] = MCPServer(
     version=version("aristotle-mcp"),
     instructions=(
         "Native aristotlelib 2.1 Project, AgentTask, and Event operations for Lean 4. "
-        "Use wait_task for bounded polling and answer_question for pending agent questions. "
+        "Use wait_task for bounded polling: terminal means stop polling and inspect status, "
+        "timed_out means inspect with get_task or list_task_events and wait again, and "
+        "waiting_for_answer means use answer_question with the returned event_id then wait "
+        "again. Each follow-up returns a new task_id. With wait=false, retain project_id and "
+        "task_id, then use wait_task and, after completion, download_project_files. "
+        "For artifact success, check code, output_path, "
+        "output_summary, and message rather than status alone. "
         "The project must depend on Mathlib; generated-proof files need `import Mathlib.Tactic`."
     ),
 )
@@ -41,7 +47,10 @@ async def submit_project_tool(
     public_file_path: str | None = None,
     agent_questions_setting: AgentQuestionsSetting = AgentQuestionsSetting.DISABLED,
 ) -> JsonObject:
-    """Create a Project from one directory or tar archive and return project/task IDs."""
+    """Create a Project from one directory or tar archive and return project/task IDs.
+
+    Agent questions are disabled by default; TIMEOUT_15_MIN opts in.
+    """
     result = await submit_project(
         prompt,
         project_dir,
@@ -78,7 +87,10 @@ async def continue_project_tool(
     files: list[str] | None = None,
     agent_questions_setting: AgentQuestionsSetting = AgentQuestionsSetting.DISABLED,
 ) -> JsonObject:
-    """Send an INSTRUCT follow-up to an idle Project; optional files are uploaded with the task."""
+    """Send an INSTRUCT follow-up to an idle Project.
+
+    Optional files are uploaded, a new task_id is returned, and question handling is opt-in.
+    """
     return (await continue_project(project_id, prompt, files, agent_questions_setting)).to_dict()
 
 
@@ -88,7 +100,10 @@ async def ask_project_tool(
     prompt: str,
     agent_questions_setting: AgentQuestionsSetting = AgentQuestionsSetting.DISABLED,
 ) -> JsonObject:
-    """Send an ASK follow-up that creates an AgentTask and may later require an answer."""
+    """Send an ASK follow-up with no file upload.
+
+    It creates a new task_id, and question handling is opt-in.
+    """
     return (await ask_project(project_id, prompt, agent_questions_setting)).to_dict()
 
 
@@ -121,7 +136,7 @@ async def wait_task_tool(
 
 @mcp.tool(name="cancel_task", structured_output=False)
 async def cancel_task_tool(task_id: str) -> JsonObject:
-    """Cancel a nonterminal AgentTask and return its updated native status."""
+    """Cancel the specified task only, not the Project or sibling tasks."""
     return (await cancel_task(task_id)).to_dict()
 
 
@@ -154,7 +169,10 @@ async def download_project_files_tool(
     output_path: str | None = None,
     overwrite: bool = False,
 ) -> JsonObject:
-    """Atomically download a Project archive; overwrite defaults false."""
+    """Atomically download a Project archive.
+
+    If code or output_path is absent, use this fallback for deferred artifacts.
+    """
     return (await download_project_files(project_id, output_path, overwrite)).to_dict()
 
 
@@ -188,8 +206,11 @@ async def formalize_tool(
     context_file: str | None = None,
     wait: bool = True,
 ) -> JsonObject:
-    """Formalize prose in a Mathlib project; generated files need
-    `import Mathlib.Tactic`."""
+    """Formalize prose in a Mathlib project.
+
+    prove=false formalizes only; prove=true also proves. Generated files need
+    `import Mathlib.Tactic`.
+    """
     return (await formalize(description, prove, context_file, wait)).to_dict()
 
 

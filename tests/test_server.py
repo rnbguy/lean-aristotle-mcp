@@ -67,6 +67,48 @@ async def test_server_describes_mathlib_tactic_requirement() -> None:
 
 
 @pytest.mark.asyncio
+async def test_server_instructions_describe_runtime_lifecycle() -> None:
+    instructions = mcp.instructions or ""
+
+    for fragment in (
+        "terminal",
+        "timed_out",
+        "waiting_for_answer",
+        "answer_question",
+        "wait again",
+        "wait=false",
+        "project_id",
+        "task_id",
+        "new task_id",
+        "code",
+        "output_path",
+        "output_summary",
+        "message",
+        "download_project_files",
+    ):
+        assert fragment in instructions
+
+
+@pytest.mark.asyncio
+async def test_server_descriptions_explain_runtime_options() -> None:
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+
+    expected_fragments = {
+        "submit_project": ("question", "TIMEOUT_15_MIN"),
+        "continue_project": ("INSTRUCT", "files", "new task_id", "question"),
+        "ask_project": ("ASK", "no file", "new task_id", "question"),
+        "cancel_task": ("specified task", "not the Project", "sibling tasks"),
+        "download_project_files": ("code", "output_path", "absent"),
+        "formalize": ("prove=false", "prove=true"),
+    }
+
+    for tool_name, fragments in expected_fragments.items():
+        description = tools[tool_name].description or ""
+        for fragment in fragments:
+            assert fragment in description
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["auto", "legacy"])
 async def test_server_client_negotiates_in_memory(mode: Literal["auto", "legacy"]) -> None:
     async with Client(mcp, mode=mode) as client:
